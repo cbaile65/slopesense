@@ -10,7 +10,7 @@ DEPTH_STACK_N = 10
 
 # Detection (meters)
 DIVOT_MIN_M, DIVOT_MAX_M = 0.002, 0.008   # start wide; tighten to 0.005 later
-MIN_BLOB_AREA_PX = 120                    # bump up if speckle persists
+MIN_BLOB_AREA_PX = 120                    # bump up if speckle
 
 # Foreground segmentation (depth band around clicked surface)
 BAND_HALF_M = 0.06                        # +/- 6 cm around clicked depth
