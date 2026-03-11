@@ -2,7 +2,7 @@ import requests
 import time
 
 # IP address of your Raspberry Pi and the port Flask is running on
-PI_URL = "http://192.168.2.2:5000"
+PI_URL = "http://192.168.5.2:5000"
 
 def set_remote_pin(pin, state):
     """Sends an HTTP GET request to the Pi to toggle a pin."""
@@ -28,5 +28,3 @@ try:
 
 except KeyboardInterrupt:
     print("\nExiting master program...")
-
-    #Live edit test
