@@ -1,7 +1,7 @@
 import requests
 import time
 
-# The IP address of your Raspberry Pi and the port Flask is running on
+# IP address of your Raspberry Pi and the port Flask is running on
 PI_URL = "http://192.168.2.2:5000"
 
 def set_remote_pin(pin, state):
