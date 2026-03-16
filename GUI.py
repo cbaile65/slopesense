@@ -18,17 +18,17 @@ class FlowcheckGUI:
         self.current_h = 480
 
         # ==========================================
-        # 1. MAIN WINDOW GRID LAYOUT (Restored 2 Columns)
+        # 1. MAIN WINDOW GRID LAYOUT
         # ==========================================
-        self.root.columnconfigure(0, weight=1, uniform="main_cols")  # Left half
-        self.root.columnconfigure(1, weight=1, uniform="main_cols")  # Right half (Empty)
+        self.root.columnconfigure(0, weight=1, uniform="main_cols")
+        self.root.columnconfigure(1, weight=1, uniform="main_cols")
 
         self.root.rowconfigure(0, weight=0)  # Row 0: Top Header area
-        self.root.rowconfigure(1, weight=1)  # Row 1: Middle area (Camera on left, empty on right)
-        self.root.rowconfigure(2, weight=0)  # Row 2: Bottom area (Buttons)
+        self.root.rowconfigure(1, weight=1)  # Row 1: Middle area
+        self.root.rowconfigure(2, weight=0)  # Row 2: Bottom area
 
         # ==========================================
-        # 2. TOP ROW: Header Frame (Logo + Version)
+        # 2. TOP ROW: Header Frame (Logo + Version) - STAYS VISIBLE
         # ==========================================
         self.header_frame = tk.Frame(self.root, bg="white")
         self.header_frame.grid(row=0, column=0, sticky="nw", padx=40, pady=(20, 10))
@@ -36,7 +36,7 @@ class FlowcheckGUI:
         logo_path = os.path.join("files", "flowcheck_logo.png")
         try:
             logo_img = Image.open(logo_path)
-            target_height = 125
+            target_height = 100
             aspect_ratio = logo_img.width / logo_img.height
             target_width = int(target_height * aspect_ratio)
 
@@ -49,7 +49,6 @@ class FlowcheckGUI:
 
         self.title_label.pack(side="left")
 
-        # The V0.1 bold text right beside the logo
         self.version_label = tk.Label(
             self.header_frame,
             text="V0.1",
@@ -60,7 +59,7 @@ class FlowcheckGUI:
         self.version_label.pack(side="left", padx=(15, 0), anchor="s", pady=(0, 15))
 
         # ==========================================
-        # 3. MIDDLE ROW: Video Feed (Locked to Left Half)
+        # 3. MIDDLE ROW: Video Feed
         # ==========================================
         self.video_container = tk.Frame(self.root, bg="white")
         self.video_container.grid(row=1, column=0, sticky="nsew", padx=(40, 20), pady=10)
@@ -71,21 +70,18 @@ class FlowcheckGUI:
         self.video_label.bind("<Button-1>", self.on_video_click)
         self.root.bind("<r>", self.on_r_keypress)
 
-        # Right side (row 1, column 1) remains completely empty
-
         # ==========================================
-        # 4. BOTTOM ROW: 6 Buttons
+        # 4. BOTTOM ROW: Main Screen Buttons
         # ==========================================
         self.button_frame = tk.Frame(self.root, bg="white")
-        # Span across BOTH columns so it takes up the full bottom width
         self.button_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=40, pady=(20, 40))
 
-        # Create 6 equal columns for the buttons
         for col in range(6):
             self.button_frame.columnconfigure(col, weight=1, uniform="btn_cols")
 
+        # Hooked up the command for "Select SKU"
         button_config = [
-            {"text": "Select SKU", "command": None, "bg": "#A9A9A9"},
+            {"text": "Select SKU", "command": self.open_sku_menu, "bg": "#A9A9A9"},
             {"text": "", "command": None, "bg": "#A9A9A9"},
             {"text": "", "command": None, "bg": "#A9A9A9"},
             {"text": "", "command": None, "bg": "#A9A9A9"},
@@ -103,18 +99,77 @@ class FlowcheckGUI:
                 height=3,
                 command=config["command"]
             )
-            # Add padding between buttons, no outer padding on ends
             px = (0, 15) if i < 5 else (0, 0)
             btn.grid(row=0, column=i, sticky="nsew", padx=px)
+
+        # ==========================================
+        # 5. Build Submenus
+        # ==========================================
+        self.create_sku_menu()
 
         self.root.update_idletasks()
 
         # ==========================================
-        # 5. Initialize Camera
+        # 6. Initialize Camera
         # ==========================================
         self.camera = Defect_Masking.DefectDetector()
         self.update_video()
 
+    # ==========================================
+    # SUBMENU LOGIC
+    # ==========================================
+    def create_sku_menu(self):
+        """Builds the hidden 3x2 SKU selection layout."""
+        self.sku_frame = tk.Frame(self.root, bg="white")
+
+        # Create a 3x2 grid inside the sku_frame
+        for col in range(3):
+            self.sku_frame.columnconfigure(col, weight=1, uniform="sku_grid_cols")
+        for row in range(2):
+            self.sku_frame.rowconfigure(row, weight=1, uniform="sku_grid_rows")
+
+        # Generate the 6 large buttons
+        for r in range(2):
+            for c in range(3):
+                if r == 1 and c == 2:
+                    # Bottom Right Button = Back
+                    btn = tk.Button(
+                        self.sku_frame,
+                        text="Back",
+                        font=("Arial", 24, "bold"),
+                        bg="#A9A9A9",
+                        command=self.close_sku_menu
+                    )
+                else:
+                    # The other 5 blank buttons
+                    btn = tk.Button(
+                        self.sku_frame,
+                        text="",
+                        font=("Arial", 24, "bold"),
+                        bg="#E0E0E0"
+                    )
+
+                # Add padding around the buttons so they don't touch
+                btn.grid(row=r, column=c, sticky="nsew", padx=15, pady=15)
+
+    def open_sku_menu(self):
+        """Hides the main screen elements and shows the SKU menu."""
+        self.video_container.grid_remove()
+        self.button_frame.grid_remove()
+
+        # Place the SKU menu across the remaining space (Rows 1 & 2)
+        self.sku_frame.grid(row=1, column=0, columnspan=2, rowspan=2, sticky="nsew", padx=25, pady=(0, 25))
+
+    def close_sku_menu(self):
+        """Hides the SKU menu and brings back the main screen."""
+        self.sku_frame.grid_remove()
+
+        self.video_container.grid()
+        self.button_frame.grid()
+
+    # ==========================================
+    # CORE FUNCTIONS
+    # ==========================================
     def escape_fullscreen(self, event=None):
         self.root.attributes("-fullscreen", False)
 
