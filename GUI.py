@@ -2,7 +2,9 @@ import tkinter as tk
 from PIL import Image, ImageTk
 import cv2
 import os
-import Defect_Masking  # Imports your camera script
+import threading
+import time
+import Defect_Masking
 
 
 class FlowcheckGUI:
@@ -13,23 +15,24 @@ class FlowcheckGUI:
         self.root.attributes("-fullscreen", True)
         self.root.bind("<Escape>", self.escape_fullscreen)
 
-        # Track current display size to map mouse clicks back to native 640x480
         self.current_w = 640
         self.current_h = 480
+
+        self.last_cw = 0
+        self.last_ch = 0
 
         # ==========================================
         # 1. MAIN WINDOW GRID LAYOUT
         # ==========================================
-        self.root.columnconfigure(0, weight=1, uniform="main_cols")
-        self.root.columnconfigure(1, weight=1, uniform="main_cols")
-
-        self.root.rowconfigure(0, weight=0)  # Row 0: Top Header area
-        self.root.rowconfigure(1, weight=1)  # Row 1: Middle area
-        self.root.rowconfigure(2, weight=0)  # Row 2: Bottom area
+        # Initial grid config; dynamic sizing is handled by apply_sku_layout()
+        self.root.rowconfigure(0, weight=0)
+        self.root.rowconfigure(1, weight=1)
+        self.root.rowconfigure(2, weight=0)
 
         # ==========================================
-        # 2. TOP ROW: Header Frame (Logo + Version) - STAYS VISIBLE
+        # 2. TOP ROW: Header Frame (Left) & Info Frame (Right)
         # ==========================================
+        # -- LEFT SIDE: Logo & Version --
         self.header_frame = tk.Frame(self.root, bg="white")
         self.header_frame.grid(row=0, column=0, sticky="nw", padx=40, pady=(20, 10))
 
@@ -58,12 +61,23 @@ class FlowcheckGUI:
         )
         self.version_label.pack(side="left", padx=(15, 0), anchor="s", pady=(0, 15))
 
+        # -- RIGHT SIDE: Info Text --
+        self.info_frame = tk.Frame(self.root, bg="white")
+
+        self.lbl_cam_height = tk.Label(self.info_frame, text="Camera Height: --", bg="white", fg="black")
+        self.lbl_tub_detected = tk.Label(self.info_frame, text="Tub Detected: --", bg="white", fg="black")
+        self.lbl_defects = tk.Label(self.info_frame, text="Defects Detected: --", bg="white", fg="black")
+        self.lbl_units = tk.Label(self.info_frame, text="Units Scanned: --", bg="white", fg="black")
+
+        self.lbl_cam_height.pack(anchor="w", pady=6)
+        self.lbl_tub_detected.pack(anchor="w", pady=6)
+        self.lbl_defects.pack(anchor="w", pady=6)
+        self.lbl_units.pack(anchor="w", pady=6)
+
         # ==========================================
         # 3. MIDDLE ROW: Video Feed
         # ==========================================
         self.video_container = tk.Frame(self.root, bg="white")
-        self.video_container.grid(row=1, column=0, sticky="nsew", padx=(40, 20), pady=10)
-
         self.video_label = tk.Label(self.video_container, bg="white")
         self.video_label.place(relx=0.5, rely=0.5, anchor="center")
 
@@ -79,7 +93,6 @@ class FlowcheckGUI:
         for col in range(6):
             self.button_frame.columnconfigure(col, weight=1, uniform="btn_cols")
 
-        # Hooked up the command for "Select SKU"
         button_config = [
             {"text": "Select SKU", "command": self.open_sku_menu, "bg": "#A9A9A9"},
             {"text": "", "command": None, "bg": "#A9A9A9"},
@@ -103,69 +116,127 @@ class FlowcheckGUI:
             btn.grid(row=0, column=i, sticky="nsew", padx=px)
 
         # ==========================================
-        # 5. Build Submenus
+        # 5. Build Submenus & Set Default Layout
         # ==========================================
         self.create_sku_menu()
 
+        # Set "Strada (Shower Base)" as the default layout on boot
+        self.apply_sku_layout("Strada\n(Shower Base)")
         self.root.update_idletasks()
 
         # ==========================================
-        # 6. Initialize Camera
+        # 6. Initialize Camera & Threading
         # ==========================================
         self.camera = Defect_Masking.DefectDetector()
+
+        self.latest_frame = None
+        self.last_drawn_frame = None
+        self.is_running = True
+
+        self.capture_thread = threading.Thread(target=self.frame_capture_thread, daemon=True)
+        self.capture_thread.start()
+
         self.update_video()
+
+    def frame_capture_thread(self):
+        """Runs continuously in the background to fetch frames."""
+        while self.is_running:
+            try:
+                frame = self.camera.get_frame()
+                if frame is not None:
+                    self.latest_frame = frame
+            except Exception as e:
+                print(f"Camera thread error: {e}")
+            time.sleep(0.01)
 
     # ==========================================
     # SUBMENU LOGIC
     # ==========================================
     def create_sku_menu(self):
-        """Builds the hidden 3x2 SKU selection layout."""
         self.sku_frame = tk.Frame(self.root, bg="white")
 
-        # Create a 3x2 grid inside the sku_frame
         for col in range(3):
             self.sku_frame.columnconfigure(col, weight=1, uniform="sku_grid_cols")
         for row in range(2):
             self.sku_frame.rowconfigure(row, weight=1, uniform="sku_grid_rows")
 
-        # Generate the 6 large buttons
-        for r in range(2):
-            for c in range(3):
-                if r == 1 and c == 2:
-                    # Bottom Right Button = Back
-                    btn = tk.Button(
-                        self.sku_frame,
-                        text="Back",
-                        font=("Arial", 24, "bold"),
-                        bg="#A9A9A9",
-                        command=self.close_sku_menu
-                    )
-                else:
-                    # The other 5 blank buttons
-                    btn = tk.Button(
-                        self.sku_frame,
-                        text="",
-                        font=("Arial", 24, "bold"),
-                        bg="#E0E0E0"
-                    )
+        sku_button_config = [
+            {"text": "Strada\n(Shower Base)", "command": lambda: self.select_sku("Strada\n(Shower Base)"),
+             "bg": "#E0E0E0"},
+            {"text": "(Skirted Tub)", "command": lambda: self.select_sku("(Skirted Tub)"), "bg": "#E0E0E0"},
+            {"text": "(Tub-Shower)", "command": lambda: self.select_sku("(Tub-Shower)"), "bg": "#E0E0E0"},
+            {"text": "", "command": None, "bg": "#E0E0E0"},
+            {"text": "*Raw Scan*", "command": None, "bg": "#E0E0E0"},
+            {"text": "Back", "command": self.close_sku_menu, "bg": "#A9A9A9"}
+        ]
 
-                # Add padding around the buttons so they don't touch
-                btn.grid(row=r, column=c, sticky="nsew", padx=15, pady=15)
+        for i, config in enumerate(sku_button_config):
+            r = i // 3
+            c = i % 3
+
+            btn = tk.Button(
+                self.sku_frame,
+                text=config["text"],
+                font=("Arial", 24, "bold"),
+                bg=config["bg"],
+                fg="black",
+                command=config["command"]
+            )
+            btn.grid(row=r, column=c, sticky="nsew", padx=15, pady=15)
+
+    def select_sku(self, sku_name):
+        self.apply_sku_layout(sku_name)
+        self.close_sku_menu()
+
+    def apply_sku_layout(self, sku_name):
+        """Dynamically adjusts the grid proportions and text based on the selected SKU."""
+        if sku_name in ["Strada\n(Shower Base)", "(Skirted Tub)"]:
+            # EXPANDED LAYOUT: 60% / 40% split to prevent text cutoff
+            self.root.columnconfigure(0, weight=3, uniform="expanded_cols")
+            self.root.columnconfigure(1, weight=2, uniform="expanded_cols")
+
+            # Push camera container as far left as possible
+            self.video_container.grid(row=1, column=0, sticky="nsew", padx=(10, 10), pady=10)
+
+            # Center text in row 1, slightly adjust font size
+            large_font = ("Arial", 28, "bold")
+            self.lbl_cam_height.config(font=large_font)
+            self.lbl_tub_detected.config(font=large_font)
+            self.lbl_defects.config(font=large_font)
+            self.lbl_units.config(font=large_font)
+
+            self.info_frame.grid_configure(row=1, column=1, rowspan=1, sticky="w", padx=(10, 20), pady=0)
+
+        elif sku_name == "(Tub-Shower)":
+            # DEFAULT LAYOUT: 50/50 screen split
+            self.root.columnconfigure(0, weight=1, uniform="main_cols")
+            self.root.columnconfigure(1, weight=1, uniform="main_cols")
+
+            # Restore standard camera container padding
+            self.video_container.grid(row=1, column=0, sticky="nsew", padx=(40, 20), pady=10)
+
+            # Move text back to top right
+            default_font = ("Arial", 24, "bold")
+            self.lbl_cam_height.config(font=default_font)
+            self.lbl_tub_detected.config(font=default_font)
+            self.lbl_defects.config(font=default_font)
+            self.lbl_units.config(font=default_font)
+
+            self.info_frame.grid_configure(row=0, column=1, rowspan=2, sticky="nw", padx=(20, 40), pady=(30, 10))
 
     def open_sku_menu(self):
-        """Hides the main screen elements and shows the SKU menu."""
         self.video_container.grid_remove()
         self.button_frame.grid_remove()
+        self.info_frame.grid_remove()
 
-        # Place the SKU menu across the remaining space (Rows 1 & 2)
         self.sku_frame.grid(row=1, column=0, columnspan=2, rowspan=2, sticky="nsew", padx=25, pady=(0, 25))
 
     def close_sku_menu(self):
-        """Hides the SKU menu and brings back the main screen."""
         self.sku_frame.grid_remove()
 
         self.video_container.grid()
         self.button_frame.grid()
+        self.info_frame.grid()
 
     # ==========================================
     # CORE FUNCTIONS
@@ -184,35 +255,48 @@ class FlowcheckGUI:
         self.camera.reset_depth()
 
     def update_video(self):
-        frame = self.camera.get_frame()
+        # 1. Update UI Labels from Camera Data
+        if self.camera.ref_depth is not None:
+            self.lbl_cam_height.config(text=f"Camera Height: {self.camera.ref_depth:.3f} m")
+        else:
+            self.lbl_cam_height.config(text="Camera Height: --")
 
-        if frame is not None:
+        # 2. Update Video Feed
+        frame = self.latest_frame
+
+        if frame is not None and frame is not self.last_drawn_frame:
+            self.last_drawn_frame = frame
+
             cw = self.video_container.winfo_width()
             ch = self.video_container.winfo_height()
 
             if cw > 10 and ch > 10:
-                aspect = 640 / 480
-                container_aspect = cw / ch
+                if cw != self.last_cw or ch != self.last_ch:
+                    aspect = 640 / 480
+                    container_aspect = cw / ch
 
-                if container_aspect > aspect:
-                    self.current_h = ch
-                    self.current_w = int(ch * aspect)
-                else:
-                    self.current_w = cw
-                    self.current_h = int(cw / aspect)
+                    if container_aspect > aspect:
+                        self.current_h = ch
+                        self.current_w = int(ch * aspect)
+                    else:
+                        self.current_w = cw
+                        self.current_h = int(cw / aspect)
 
-                frame = cv2.resize(frame, (self.current_w, self.current_h), interpolation=cv2.INTER_LINEAR)
+                    self.last_cw = cw
+                    self.last_ch = ch
 
-            cv2_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_img = Image.fromarray(cv2_img)
-            imgtk = ImageTk.PhotoImage(image=pil_img)
+                frame_resized = cv2.resize(frame, (self.current_w, self.current_h), interpolation=cv2.INTER_LINEAR)
+                cv2_img = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(cv2_img)
+                imgtk = ImageTk.PhotoImage(image=pil_img)
 
-            self.video_label.imgtk = imgtk
-            self.video_label.configure(image=imgtk)
+                self.video_label.imgtk = imgtk
+                self.video_label.configure(image=imgtk)
 
-        self.root.after(15, self.update_video)
+        self.root.after(30, self.update_video)
 
     def on_closing(self):
+        self.is_running = False
         self.camera.stop()
         self.root.destroy()
 

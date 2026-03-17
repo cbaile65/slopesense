@@ -1,7 +1,6 @@
 import pyrealsense2 as rs
 import numpy as np
 import cv2, time, math
-from collections import deque
 
 # ----------------- Settings -----------------
 W, H, FPS = 640, 480, 30
@@ -12,10 +11,10 @@ DEPTH_STACK_N = 18
 Z_MIN_M, Z_MAX_M = 0.15, 2.00
 
 # Foreground segmentation around clicked basin depth
-BAND_HALF_M = 0.02   # +/- 3 cm
+BAND_HALF_M = 0.02
 
 # Smoothing of stacked depth
-SMOOTH_K = 7         # must be odd
+SMOOTH_K = 7
 
 # IMU fusion
 ALPHA = 0.98
@@ -46,17 +45,19 @@ PERSIST_DILATE_K = 5
 
 # Physical blob filtering
 MM_PER_INCH = 25.4
-MIN_BBOX_W_IN = 3.0   # reject defects narrower than 3 inches
-MIN_BBOX_H_IN = 3.0   # reject defects shorter than 3 inches
+MIN_BBOX_W_IN = 3.0
+MIN_BBOX_H_IN = 3.0
 
 # Visualization
 SHOW_DIVOTS = True
+
 
 # ----------------- Helpers -----------------
 def accel_to_roll_pitch(ax, ay, az):
     roll = math.atan2(ay, az)
     pitch = math.atan2(-ax, math.sqrt(ay * ay + az * az))
     return roll, pitch
+
 
 def list_motion_profiles(dev):
     prof = {"gyro": [], "accel": []}
@@ -75,6 +76,7 @@ def list_motion_profiles(dev):
         prof[k] = sorted(list({x for x in prof[k]}), key=lambda t: t[0])
     return prof
 
+
 def start_with_best_imu():
     ctx = rs.context()
     devs = ctx.query_devices()
@@ -88,7 +90,7 @@ def start_with_best_imu():
 
     profiles = list_motion_profiles(dev)
     gyros = sorted(profiles["gyro"], key=lambda x: -x[0])
-    accs  = sorted(profiles["accel"], key=lambda x: -x[0])
+    accs = sorted(profiles["accel"], key=lambda x: -x[0])
 
     pipeline = rs.pipeline()
 
@@ -117,6 +119,7 @@ def start_with_best_imu():
     pipeline = rs.pipeline()
     return pipeline, pipeline.start(base), False
 
+
 def largest_component(mask_u8, min_area=500):
     num, labels, stats, _ = cv2.connectedComponentsWithStats(mask_u8, connectivity=8)
     if num <= 1:
@@ -128,17 +131,24 @@ def largest_component(mask_u8, min_area=500):
             best_area, best_i = area, i
     if best_area < min_area:
         return np.zeros_like(mask_u8)
+
     out = np.zeros_like(mask_u8)
-    out[labels == best_i] = 255
+    x, y, w, h = stats[best_i, cv2.CC_STAT_LEFT], stats[best_i, cv2.CC_STAT_TOP], stats[best_i, cv2.CC_STAT_WIDTH], \
+    stats[best_i, cv2.CC_STAT_HEIGHT]
+    out[y:y + h, x:x + w][labels[y:y + h, x:x + w] == best_i] = 255
     return out
+
 
 def filter_components(mask_u8, min_area):
     num, labels, stats, _ = cv2.connectedComponentsWithStats(mask_u8, connectivity=8)
     out = np.zeros_like(mask_u8)
     for i in range(1, num):
         if stats[i, cv2.CC_STAT_AREA] >= min_area:
-            out[labels == i] = 255
+            x, y, w, h = stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP], stats[i, cv2.CC_STAT_WIDTH], stats[
+                i, cv2.CC_STAT_HEIGHT]
+            out[y:y + h, x:x + w][labels[y:y + h, x:x + w] == i] = 255
     return out
+
 
 def robust_sigma(vals):
     vals = vals[np.isfinite(vals)]
@@ -148,15 +158,18 @@ def robust_sigma(vals):
     mad = np.median(np.abs(vals - med))
     return 1.4826 * mad
 
+
 def make_interior_mask(fg_mask_u8, erode_px):
     if erode_px < 3:
         return fg_mask_u8.copy()
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erode_px, erode_px))
     return cv2.erode(fg_mask_u8, k, iterations=1)
 
+
 def draw_mask_outline(img, mask_u8, color, thickness=2):
     contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(img, contours, -1, color, thickness)
+
 
 def fit_quadratic_surface(depth, mask):
     ys, xs = np.where(mask)
@@ -170,22 +183,25 @@ def fit_quadratic_surface(depth, mask):
     y = ys.astype(np.float32)
     z = depth[ys, xs].astype(np.float32)
 
-    A = np.stack([x*x, y*y, x*y, x, y, np.ones_like(x)], axis=1)
+    A = np.stack([x * x, y * y, x * y, x, y, np.ones_like(x)], axis=1)
     coeffs, *_ = np.linalg.lstsq(A, z, rcond=None)
     return coeffs.astype(np.float32)
+
 
 def quadratic_surface_img(coeffs, h, w):
     a, b, c, d, e, f = coeffs
     xs = np.arange(w, dtype=np.float32)
     ys = np.arange(h, dtype=np.float32)
     X, Y = np.meshgrid(xs, ys)
-    return a*X*X + b*Y*Y + c*X*Y + d*X + e*Y + f
+    return a * X * X + b * Y * Y + c * X * Y + d * X + e * Y + f
+
 
 def masked_local_trend(img, mask, sigma):
     mask_f = mask.astype(np.float32)
     num = cv2.GaussianBlur((img * mask_f).astype(np.float32), (0, 0), sigmaX=sigma, sigmaY=sigma)
     den = cv2.GaussianBlur(mask_f, (0, 0), sigmaX=sigma, sigmaY=sigma)
     return num / (den + 1e-6)
+
 
 def filter_components_physical(mask_u8, depth_s, fx, fy, min_w_in, min_h_in):
     num, labels, stats, _ = cv2.connectedComponentsWithStats(mask_u8, connectivity=8)
@@ -204,8 +220,11 @@ def filter_components_physical(mask_u8, depth_s, fx, fy, min_w_in, min_h_in):
         if area <= 0:
             continue
 
-        comp_mask = (labels == i)
-        z_vals = depth_s[comp_mask]
+        slice_labels = labels[y:y + h, x:x + w]
+        slice_depth = depth_s[y:y + h, x:x + w]
+
+        comp_mask = (slice_labels == i)
+        z_vals = slice_depth[comp_mask]
         z_vals = z_vals[np.isfinite(z_vals)]
         z_vals = z_vals[z_vals > 0]
 
@@ -219,9 +238,10 @@ def filter_components_physical(mask_u8, depth_s, fx, fy, min_w_in, min_h_in):
         height_mm = (h * z_med_mm) / fy
 
         if width_mm >= min_w_mm and height_mm >= min_h_mm:
-            out[comp_mask] = 255
+            out[y:y + h, x:x + w][comp_mask] = 255
 
     return out
+
 
 # ----------------- Main Class for GUI Integration -----------------
 class DefectDetector:
@@ -249,13 +269,21 @@ class DefectDetector:
         self.temporal = rs.temporal_filter()
         self.hole = rs.hole_filling_filter()
 
+        self.k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        self.k3 = np.ones((3, 3), np.uint8)
+        self.kclose = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (POST_CLOSE_K, POST_CLOSE_K))
+        self.kvote = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (PERSIST_DILATE_K, PERSIST_DILATE_K))
+
+        self.depth_stack = np.zeros((DEPTH_STACK_N, H, W), dtype=np.float32)
+        self.depth_count = 0
+
+        self.div_history = np.zeros((PERSIST_N, H, W), dtype=np.uint8)
+        self.div_count = 0
+
         print("Warming up camera...")
         for _ in range(30):
             self.pipeline.wait_for_frames(TIMEOUT_MS)
         print("Warmup complete.")
-
-        self.depth_stack = deque(maxlen=DEPTH_STACK_N)
-        self.div_history = deque(maxlen=PERSIST_N)
 
         self.click = {"x": W // 2, "y": H // 2}
         self.ref_depth = None
@@ -265,25 +293,22 @@ class DefectDetector:
         self.last_acc = None
 
     def register_click(self, x, y):
-        """Called by the GUI when the user clicks the video feed."""
         self.click["x"] = int(np.clip(x, 0, W - 1))
         self.click["y"] = int(np.clip(y, 0, H - 1))
         self.reset_depth()
 
     def reset_depth(self):
-        """Called by the GUI to reset the reference depth."""
         self.ref_depth = None
-        self.depth_stack.clear()
-        self.div_history.clear()
+        self.depth_count = 0
+        self.div_count = 0
 
     def get_frame(self):
-        """Processes one frame and returns it to the GUI as a BGR numpy array."""
         try:
-            frames = self.pipeline.wait_for_frames(TIMEOUT_MS)
+            # Safe 1000ms block since Tkinter runs on the main thread
+            frames = self.pipeline.wait_for_frames(1000)
         except RuntimeError:
-            return None # Handle potential camera disconnects gracefully
+            return None
 
-        # -------- IMU update --------
         if self.imu_enabled:
             now = time.time()
             dt = max(1e-4, now - self.last_t)
@@ -308,23 +333,28 @@ class DefectDetector:
                 self.roll = ALPHA * self.roll + (1 - ALPHA) * ar
                 self.pitch = ALPHA * self.pitch + (1 - ALPHA) * ap
 
-        # -------- video + depth --------
         frames = self.align.process(frames)
         cf = frames.get_color_frame()
         df = frames.get_depth_frame()
         if not cf or not df:
             return None
 
-        df = self.hole.process(self.temporal.process(self.spatial.process(df))).as_depth_frame()
-
-        color = np.asanyarray(cf.get_data())
+        # Detach array references from pyrealsense internal memory explicitly
+        color = np.asanyarray(cf.get_data()).copy()
         depth_m = np.asanyarray(df.get_data()).astype(np.float32) * self.depth_scale
 
-        self.depth_stack.append(depth_m)
-        if len(self.depth_stack) < DEPTH_STACK_N:
+        # IMPORTANT: Explicitly delete C++ buffer references to prevent GC locking
+        del cf
+        del df
+        del frames
+
+        self.depth_stack[self.depth_count % DEPTH_STACK_N] = depth_m
+        self.depth_count += 1
+
+        if self.depth_count < DEPTH_STACK_N:
             return color.copy()
 
-        depth_med = np.median(np.stack(self.depth_stack, axis=0), axis=0).astype(np.float32)
+        depth_med = np.median(self.depth_stack, axis=0).astype(np.float32)
 
         if SMOOTH_K >= 3 and SMOOTH_K % 2 == 1:
             depth_s = cv2.GaussianBlur(depth_med, (SMOOTH_K, SMOOTH_K), 0)
@@ -337,7 +367,6 @@ class DefectDetector:
         if self.ref_depth is None and Z_MIN_M < click_depth < Z_MAX_M:
             self.ref_depth = click_depth
 
-        # -------- foreground segmentation --------
         valid = (depth_s > Z_MIN_M) & (depth_s < Z_MAX_M)
         fg_u8 = np.zeros((H, W), dtype=np.uint8)
 
@@ -345,9 +374,8 @@ class DefectDetector:
             band = valid & (np.abs(depth_s - self.ref_depth) <= BAND_HALF_M)
             fg_u8[band] = 255
 
-            k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-            fg_u8 = cv2.morphologyEx(fg_u8, cv2.MORPH_OPEN, k5, iterations=1)
-            fg_u8 = cv2.morphologyEx(fg_u8, cv2.MORPH_CLOSE, k5, iterations=2)
+            fg_u8 = cv2.morphologyEx(fg_u8, cv2.MORPH_OPEN, self.k5, iterations=1)
+            fg_u8 = cv2.morphologyEx(fg_u8, cv2.MORPH_CLOSE, self.k5, iterations=2)
             fg_u8 = largest_component(fg_u8, min_area=FG_MIN_AREA)
 
         fg_mask = fg_u8 > 0
@@ -357,7 +385,6 @@ class DefectDetector:
             cv2.circle(highlight, (x, y), 7, (0, 255, 255), -1)
             return highlight
 
-        # -------- interior inspection mask --------
         interior_u8 = make_interior_mask(fg_u8, INTERIOR_ERODE_PX)
         interior_mask = interior_u8 > 0
 
@@ -365,7 +392,6 @@ class DefectDetector:
             interior_u8 = fg_u8.copy()
             interior_mask = fg_mask
 
-        # -------- fit smooth basin surface --------
         coeffs = fit_quadratic_surface(depth_s, interior_mask)
         surf = quadratic_surface_img(coeffs, H, W)
 
@@ -385,32 +411,27 @@ class DefectDetector:
         auto_thr_m = AUTO_SIGMA_MULT * sigma
         auto_thr_m = np.clip(auto_thr_m, MIN_DEFECT_MM / 1000.0, MAX_DEFECT_MM / 1000.0)
 
-        # Divots only for pooling risk
         div_mask_now = interior_mask & (resid_local_s >= auto_thr_m)
         div_u8 = (div_mask_now.astype(np.uint8) * 255)
 
-        k3 = np.ones((3, 3), np.uint8)
-        kclose = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (POST_CLOSE_K, POST_CLOSE_K))
-        kvote = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (PERSIST_DILATE_K, PERSIST_DILATE_K))
-
-        div_u8 = cv2.morphologyEx(div_u8, cv2.MORPH_OPEN, k3, iterations=1)
-        div_u8 = cv2.morphologyEx(div_u8, cv2.MORPH_CLOSE, kclose, iterations=1)
+        div_u8 = cv2.morphologyEx(div_u8, cv2.MORPH_OPEN, self.k3, iterations=1)
+        div_u8 = cv2.morphologyEx(div_u8, cv2.MORPH_CLOSE, self.kclose, iterations=1)
         div_u8 = filter_components(div_u8, MIN_DEFECT_AREA_PX)
 
-        # Store slightly dilated masks for persistence voting
-        div_vote_u8 = cv2.dilate(div_u8, kvote, iterations=1)
-        self.div_history.append((div_vote_u8 > 0).astype(np.uint8))
+        div_vote_u8 = cv2.dilate(div_u8, self.kvote, iterations=1)
 
-        if len(self.div_history) > 0:
-            div_votes = np.sum(np.stack(self.div_history, axis=0), axis=0)
+        self.div_history[self.div_count % PERSIST_N] = (div_vote_u8 > 0).astype(np.uint8)
+        self.div_count += 1
+
+        if self.div_count > 0:
+            valid_history = min(self.div_count, PERSIST_N)
+            div_votes = np.sum(self.div_history[:valid_history], axis=0)
             div_mask = div_votes >= PERSIST_MIN_HITS
         else:
             div_mask = div_u8 > 0
 
-        # Final cleanup by pixel area
         div_final_u8 = filter_components((div_mask.astype(np.uint8) * 255), MIN_DEFECT_AREA_PX)
 
-        # Final cleanup by physical size
         div_final_u8 = filter_components_physical(
             div_final_u8,
             depth_s,
@@ -422,7 +443,6 @@ class DefectDetector:
 
         div_mask = div_final_u8 > 0
 
-        # -------- overlay --------
         overlay = highlight.copy()
         if SHOW_DIVOTS:
             overlay[div_mask] = (0, 0, 255)
@@ -432,13 +452,11 @@ class DefectDetector:
         draw_mask_outline(highlight, fg_u8, (0, 255, 255), 1)
         draw_mask_outline(highlight, interior_u8, (0, 255, 0), 2)
 
-        # Keep the target circle on the highlight feed
         cv2.circle(highlight, (x, y), 6, (0, 255, 255), -1)
 
         return highlight
 
     def stop(self):
-        """Safely shuts down the RealSense pipeline."""
         try:
             self.pipeline.stop()
         except:
