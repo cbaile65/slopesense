@@ -23,26 +23,21 @@ class HardwareManager:
 
         self.stop_all()
 
+    # ==========================================
+    # BACKGROUND SERVO LOOP
+    # ==========================================
     def _servo_loop(self):
         """Continuously runs in the background to sweep the servo fluidly."""
         while self.servo_running:
             if self.servo_direction != 0:
-                # Fluidity fix: Step by exactly 1 degree at a very fast rate (50 times a second).
-                # This keeps the servo motor constantly tracking a moving target, eliminating the "stop/start" jitter.
+                # Step by 1 degree at 50Hz for a fluid track
                 new_angle = self.servo_angle + self.servo_direction
-
-                # Clamp the angle so it cannot exceed 0 or 180 degrees
                 new_angle = max(0, min(180, new_angle))
 
                 if new_angle != self.servo_angle:
                     self.servo_angle = new_angle
-
-                    # Fire the HTTP request in a tiny disposable background thread.
-                    # This guarantees the sweeping loop keeps perfect time (0.02s)
-                    # and doesn't hiccup while waiting for Wi-Fi responses.
                     threading.Thread(target=self._send_servo_cmd, args=(self.servo_angle,), daemon=True).start()
 
-            # Update rate: 0.02s = 50 updates a second (50 degrees per second sweep speed).
             time.sleep(0.02)
 
     def _send_servo_cmd(self, angle):
@@ -52,55 +47,55 @@ class HardwareManager:
         except:
             pass
 
-    def move_forward(self, start):
+    # ==========================================
+    # DC MOTOR CONTROL (DRY Helper)
+    # ==========================================
+    def _control_dc_motor(self, active_pin, inactive_pin, start):
+        """Generic handler for DC motors that forces a safety interlock."""
         if start:
-            DC_Motor_Control.set_pin(MOTOR_A_PIN2, "off")  # Safety interlock
-            DC_Motor_Control.set_pin(MOTOR_A_PIN1, "on")
+            DC_Motor_Control.set_pin(inactive_pin, "off")  # Safety interlock
+            DC_Motor_Control.set_pin(active_pin, "on")
         else:
-            DC_Motor_Control.set_pin(MOTOR_A_PIN1, "off")
+            DC_Motor_Control.set_pin(active_pin, "off")
+
+    def move_forward(self, start):
+        self._control_dc_motor(MOTOR_A_PIN1, MOTOR_A_PIN2, start)
 
     def move_backward(self, start):
-        if start:
-            DC_Motor_Control.set_pin(MOTOR_A_PIN1, "off")  # Safety interlock
-            DC_Motor_Control.set_pin(MOTOR_A_PIN2, "on")
-        else:
-            DC_Motor_Control.set_pin(MOTOR_A_PIN2, "off")
+        self._control_dc_motor(MOTOR_A_PIN2, MOTOR_A_PIN1, start)
 
     def move_up(self, start):
-        if start:
-            DC_Motor_Control.set_pin(MOTOR_B_PIN2, "off")  # Safety interlock
-            DC_Motor_Control.set_pin(MOTOR_B_PIN1, "on")
-        else:
-            DC_Motor_Control.set_pin(MOTOR_B_PIN1, "off")
+        self._control_dc_motor(MOTOR_B_PIN1, MOTOR_B_PIN2, start)
 
     def move_down(self, start):
+        self._control_dc_motor(MOTOR_B_PIN2, MOTOR_B_PIN1, start)
+
+    # ==========================================
+    # SERVO MOTOR CONTROL (DRY Helper)
+    # ==========================================
+    def _set_servo_direction(self, direction, start):
+        """Generic handler to start/stop the servo sweep cleanly."""
         if start:
-            DC_Motor_Control.set_pin(MOTOR_B_PIN1, "off")  # Safety interlock
-            DC_Motor_Control.set_pin(MOTOR_B_PIN2, "on")
-        else:
-            DC_Motor_Control.set_pin(MOTOR_B_PIN2, "off")
+            self.servo_direction = direction
+        elif self.servo_direction == direction:
+            self.servo_direction = 0
 
     def rotate_cw(self, start):
-        if start:
-            self.servo_direction = -1
-        else:
-            if self.servo_direction == -1:
-                self.servo_direction = 0
+        self._set_servo_direction(-1, start)
 
     def rotate_ccw(self, start):
-        if start:
-            self.servo_direction = 1
-        else:
-            if self.servo_direction == 1:
-                self.servo_direction = 0
+        self._set_servo_direction(1, start)
 
+    # ==========================================
+    # SAFETY & SHUTDOWN
+    # ==========================================
     def stop_all(self):
         """Emergency stop for all hardware"""
         self.servo_direction = 0
-        DC_Motor_Control.set_pin(MOTOR_A_PIN1, "off")
-        DC_Motor_Control.set_pin(MOTOR_A_PIN2, "off")
-        DC_Motor_Control.set_pin(MOTOR_B_PIN1, "off")
-        DC_Motor_Control.set_pin(MOTOR_B_PIN2, "off")
+
+        # Iterate through all DC motor pins to ensure they are off
+        for pin in (MOTOR_A_PIN1, MOTOR_A_PIN2, MOTOR_B_PIN1, MOTOR_B_PIN2):
+            DC_Motor_Control.set_pin(pin, "off")
 
     def shutdown(self):
         """Kills the background thread before the program exits"""

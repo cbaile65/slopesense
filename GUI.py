@@ -6,7 +6,7 @@ import threading
 import time
 import Defect_Masking
 import HardwareManager
-import AutoLeveler  # Imports the leveller script
+import AutoLeveler
 
 
 class FlowcheckGUI:
@@ -17,10 +17,8 @@ class FlowcheckGUI:
         self.root.attributes("-fullscreen", True)
         self.root.bind("<Escape>", self.escape_fullscreen)
 
-        self.current_w = 640
-        self.current_h = 480
-        self.last_cw = 0
-        self.last_ch = 0
+        self.current_w, self.current_h = 640, 480
+        self.last_cw, self.last_ch = 0, 0
 
         # ==========================================
         # 1. MAIN WINDOW GRID LAYOUT
@@ -30,18 +28,15 @@ class FlowcheckGUI:
         self.root.rowconfigure(2, weight=0)
 
         # ==========================================
-        # 2. TOP ROW: Header Frame (Left) & Info Frame (Right)
+        # 2. TOP ROW: Header Frame & Info Frame
         # ==========================================
         self.header_frame = tk.Frame(self.root, bg="white")
         self.header_frame.grid(row=0, column=0, sticky="nw", padx=40, pady=(20, 10))
 
-        logo_path = os.path.join("files", "flowcheck_logo.png")
         try:
-            logo_img = Image.open(logo_path)
+            logo_img = Image.open(os.path.join("files", "flowcheck_logo.png"))
             target_height = 100
-            aspect_ratio = logo_img.width / logo_img.height
-            target_width = int(target_height * aspect_ratio)
-
+            target_width = int(target_height * (logo_img.width / logo_img.height))
             logo_img = logo_img.resize((target_width, target_height), Image.LANCZOS)
             self.logo_imgtk = ImageTk.PhotoImage(logo_img)
             self.title_label = tk.Label(self.header_frame, image=self.logo_imgtk, bg="white")
@@ -51,26 +46,24 @@ class FlowcheckGUI:
 
         self.title_label.pack(side="left")
 
-        self.version_label = tk.Label(
-            self.header_frame,
-            text="V0.1",
-            font=("Arial", 24, "bold"),
-            bg="white",
-            fg="black"
-        )
+        self.version_label = tk.Label(self.header_frame, text="V0.1", font=("Arial", 24, "bold"), bg="white",
+                                      fg="black")
         self.version_label.pack(side="left", padx=(15, 0), anchor="s", pady=(0, 15))
 
         self.info_frame = tk.Frame(self.root, bg="white")
 
-        self.lbl_cam_height = tk.Label(self.info_frame, text="Camera Height: --", bg="white", fg="black")
-        self.lbl_tub_detected = tk.Label(self.info_frame, text="Tub Detected: --", bg="white", fg="black")
-        self.lbl_defects = tk.Label(self.info_frame, text="Defects Detected: --", bg="white", fg="black")
-        self.lbl_units = tk.Label(self.info_frame, text="Units Scanned: --", bg="white", fg="black")
+        # Grouped labels for easy batch-updating later
+        self.info_labels = [
+            tk.Label(self.info_frame, text="Camera Height: --", bg="white", fg="black"),
+            tk.Label(self.info_frame, text="Tub Detected: --", bg="white", fg="black"),
+            tk.Label(self.info_frame, text="Defects Detected: --", bg="white", fg="black"),
+            tk.Label(self.info_frame, text="Units Scanned: --", bg="white", fg="black")
+        ]
 
-        self.lbl_cam_height.pack(anchor="w", pady=6)
-        self.lbl_tub_detected.pack(anchor="w", pady=6)
-        self.lbl_defects.pack(anchor="w", pady=6)
-        self.lbl_units.pack(anchor="w", pady=6)
+        self.lbl_cam_height = self.info_labels[0]  # Keep reference for updating text
+
+        for lbl in self.info_labels:
+            lbl.pack(anchor="w", pady=6)
 
         # ==========================================
         # 3. MIDDLE ROW: Video Feed
@@ -92,34 +85,24 @@ class FlowcheckGUI:
             self.button_frame.columnconfigure(col, weight=1, uniform="btn_cols")
 
         button_config = [
-            {"text": "Select SKU", "command": self.open_sku_menu, "bg": "#A9A9A9"},
-            {"text": "", "command": None, "bg": "#A9A9A9"},
-            {"text": "", "command": None, "bg": "#A9A9A9"},
-            {"text": "Manual Motor\nControl", "command": self.open_motor_menu, "bg": "#A9A9A9"},
-            {"text": "Toggle Debug", "command": None, "bg": "#A9A9A9"},
-            {"text": "STOP", "command": self.on_closing, "bg": "red"}
+            ("Select SKU", self.open_sku_menu, "#A9A9A9"),
+            ("", None, "#A9A9A9"),
+            ("", None, "#A9A9A9"),
+            ("Manual Motor\nControl", self.open_motor_menu, "#A9A9A9"),
+            ("Toggle Debug", None, "#A9A9A9"),
+            ("STOP", self.on_closing, "red")
         ]
 
-        for i, config in enumerate(button_config):
-            btn = tk.Button(
-                self.button_frame,
-                text=config["text"],
-                font=("Arial", 16, "bold"),
-                bg=config["bg"],
-                fg="black",
-                height=3,
-                command=config["command"]
-            )
-            px = (0, 15) if i < 5 else (0, 0)
-            btn.grid(row=0, column=i, sticky="nsew", padx=px)
+        for i, (text, cmd, bg_color) in enumerate(button_config):
+            btn = tk.Button(self.button_frame, text=text, font=("Arial", 16, "bold"), bg=bg_color, fg="black", height=3,
+                            command=cmd)
+            btn.grid(row=0, column=i, sticky="nsew", padx=(0, 15) if i < 5 else 0)
 
         # ==========================================
-        # 5. Script Initialization
+        # 5. Initialization & Threading
         # ==========================================
         self.hw = HardwareManager.HardwareManager()
         self.camera = Defect_Masking.DefectDetector()
-
-        # Link the leveller to the initialized hardware and camera
         self.leveller = AutoLeveler.AutoLeveler(self.camera, self.hw)
 
         self.create_sku_menu()
@@ -128,16 +111,11 @@ class FlowcheckGUI:
         self.apply_sku_layout("Strada\n(Shower Base)")
         self.root.update_idletasks()
 
-        # ==========================================
-        # 6. Threading & Video
-        # ==========================================
         self.latest_frame = None
         self.last_drawn_frame = None
         self.is_running = True
 
-        self.capture_thread = threading.Thread(target=self.frame_capture_thread, daemon=True)
-        self.capture_thread.start()
-
+        threading.Thread(target=self.frame_capture_thread, daemon=True).start()
         self.update_video()
 
     def frame_capture_thread(self):
@@ -151,39 +129,38 @@ class FlowcheckGUI:
             time.sleep(0.01)
 
     # ==========================================
+    # VIEW TOGGLING HELPER
+    # ==========================================
+    def toggle_main_view(self, show=True):
+        """Hides or shows the main screen elements to make room for submenus."""
+        if show:
+            self.video_container.grid()
+            self.button_frame.grid()
+            self.info_frame.grid()
+        else:
+            self.video_container.grid_remove()
+            self.button_frame.grid_remove()
+            self.info_frame.grid_remove()
+
+    # ==========================================
     # SKU SUBMENU LOGIC
     # ==========================================
     def create_sku_menu(self):
         self.sku_frame = tk.Frame(self.root, bg="white")
+        for col in range(3): self.sku_frame.columnconfigure(col, weight=1, uniform="sku_grid_cols")
+        for row in range(2): self.sku_frame.rowconfigure(row, weight=1, uniform="sku_grid_rows")
 
-        for col in range(3):
-            self.sku_frame.columnconfigure(col, weight=1, uniform="sku_grid_cols")
-        for row in range(2):
-            self.sku_frame.rowconfigure(row, weight=1, uniform="sku_grid_rows")
-
-        sku_button_config = [
-            {"text": "Strada\n(Shower Base)", "command": lambda: self.select_sku("Strada\n(Shower Base)"),
-             "bg": "#E0E0E0"},
-            {"text": "(Skirted Tub)", "command": lambda: self.select_sku("(Skirted Tub)"), "bg": "#E0E0E0"},
-            {"text": "(Tub-Shower)", "command": lambda: self.select_sku("(Tub-Shower)"), "bg": "#E0E0E0"},
-            {"text": "", "command": None, "bg": "#E0E0E0"},
-            {"text": "*Raw Scan*", "command": None, "bg": "#E0E0E0"},
-            {"text": "Back", "command": self.close_sku_menu, "bg": "#A9A9A9"}
+        sku_btns = [
+            "Strada\n(Shower Base)", "(Skirted Tub)", "(Tub-Shower)",
+            "", "*Raw Scan*", "Back"
         ]
 
-        for i, config in enumerate(sku_button_config):
-            r = i // 3
-            c = i % 3
+        for i, name in enumerate(sku_btns):
+            cmd = self.close_sku_menu if name == "Back" else (lambda n=name: self.select_sku(n) if n else None)
+            bg_color = "#A9A9A9" if name == "Back" else "#E0E0E0"
 
-            btn = tk.Button(
-                self.sku_frame,
-                text=config["text"],
-                font=("Arial", 24, "bold"),
-                bg=config["bg"],
-                fg="black",
-                command=config["command"]
-            )
-            btn.grid(row=r, column=c, sticky="nsew", padx=15, pady=15)
+            btn = tk.Button(self.sku_frame, text=name, font=("Arial", 24, "bold"), bg=bg_color, fg="black", command=cmd)
+            btn.grid(row=i // 3, column=i % 3, sticky="nsew", padx=15, pady=15)
 
     def select_sku(self, sku_name):
         self.apply_sku_layout(sku_name)
@@ -193,112 +170,89 @@ class FlowcheckGUI:
         if sku_name in ["Strada\n(Shower Base)", "(Skirted Tub)"]:
             self.root.columnconfigure(0, weight=3, uniform="expanded_cols")
             self.root.columnconfigure(1, weight=2, uniform="expanded_cols")
-
             self.video_container.grid(row=1, column=0, sticky="nsew", padx=(10, 10), pady=10)
-
-            large_font = ("Arial", 28, "bold")
-            self.lbl_cam_height.config(font=large_font)
-            self.lbl_tub_detected.config(font=large_font)
-            self.lbl_defects.config(font=large_font)
-            self.lbl_units.config(font=large_font)
-
             self.info_frame.grid_configure(row=1, column=1, rowspan=1, sticky="w", padx=(10, 20), pady=0)
+
+            for lbl in self.info_labels:
+                lbl.config(font=("Arial", 28, "bold"))
 
         elif sku_name == "(Tub-Shower)":
             self.root.columnconfigure(0, weight=1, uniform="main_cols")
             self.root.columnconfigure(1, weight=1, uniform="main_cols")
-
             self.video_container.grid(row=1, column=0, sticky="nsew", padx=(40, 20), pady=10)
-
-            default_font = ("Arial", 24, "bold")
-            self.lbl_cam_height.config(font=default_font)
-            self.lbl_tub_detected.config(font=default_font)
-            self.lbl_defects.config(font=default_font)
-            self.lbl_units.config(font=default_font)
-
             self.info_frame.grid_configure(row=0, column=1, rowspan=2, sticky="nw", padx=(20, 40), pady=(30, 10))
 
-    def open_sku_menu(self):
-        self.video_container.grid_remove()
-        self.button_frame.grid_remove()
-        self.info_frame.grid_remove()
+            for lbl in self.info_labels:
+                lbl.config(font=("Arial", 24, "bold"))
 
+    def open_sku_menu(self):
+        self.toggle_main_view(False)
         self.sku_frame.grid(row=1, column=0, columnspan=2, rowspan=2, sticky="nsew", padx=25, pady=(0, 25))
 
     def close_sku_menu(self):
         self.sku_frame.grid_remove()
-
-        self.video_container.grid()
-        self.button_frame.grid()
-        self.info_frame.grid()
+        self.toggle_main_view(True)
 
     # ==========================================
     # MOTOR SUBMENU LOGIC
     # ==========================================
     def create_motor_menu(self):
         self.motor_frame = tk.Frame(self.root, bg="white")
+        for i in range(3): self.motor_frame.columnconfigure(i, weight=3 if i == 1 else 1)
+        for i in range(3): self.motor_frame.rowconfigure(i, weight=3 if i == 1 else 1)
 
-        self.motor_frame.columnconfigure(0, weight=1)
-        self.motor_frame.columnconfigure(1, weight=3)
-        self.motor_frame.columnconfigure(2, weight=1)
+        # -- Rotations --
+        rot_font = ("Arial", 42, "bold")
 
-        self.motor_frame.rowconfigure(0, weight=1)
-        self.motor_frame.rowconfigure(1, weight=3)
-        self.motor_frame.rowconfigure(2, weight=1)
-
-        # -- Top Row: Rotations --
-        btn_ccw = tk.Button(self.motor_frame, text="⟲", font=("Arial", 42, "bold"), bg="#E0E0E0", padx=15, pady=5)
-        btn_ccw.grid(row=0, column=0, sticky="nw", padx=40, pady=30)
-        btn_ccw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_ccw(True))
-        btn_ccw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_ccw(False))
-
-        btn_cw = tk.Button(self.motor_frame, text="⟳", font=("Arial", 42, "bold"), bg="#E0E0E0", padx=15, pady=5)
+        btn_cw = tk.Button(self.motor_frame, text="⟳", font=rot_font, bg="#E0E0E0", padx=15, pady=5)
         btn_cw.grid(row=0, column=2, sticky="ne", padx=40, pady=30)
         btn_cw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_cw(True))
         btn_cw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_cw(False))
 
+        btn_ccw = tk.Button(self.motor_frame, text="⟲", font=rot_font, bg="#E0E0E0", padx=15, pady=5)
+        btn_ccw.grid(row=0, column=0, sticky="nw", padx=40, pady=30)
+        btn_ccw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_ccw(True))
+        btn_ccw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_ccw(False))
+
         # -- Center Row: D-Pad --
-        dpad_container = tk.Frame(self.motor_frame, bg="white")
-        dpad_container.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
+        dpad = tk.Frame(self.motor_frame, bg="white")
+        dpad.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
+        dpad.columnconfigure(0, weight=5);
+        dpad.columnconfigure(1, weight=4);
+        dpad.columnconfigure(2, weight=5)
+        for i in range(3): dpad.rowconfigure(i, weight=1, uniform="dpad_rows")
 
-        dpad_container.columnconfigure(0, weight=5)
-        dpad_container.columnconfigure(1, weight=4)
-        dpad_container.columnconfigure(2, weight=5)
+        dpad_config = [
+            ("UP", 0, 1, self.hw.move_up),
+            ("DOWN", 2, 1, self.hw.move_down),
+            ("BACKWARD", 1, 0, self.hw.move_backward),
+            ("FORWARD", 1, 2, self.hw.move_forward)
+        ]
 
-        for i in range(3):
-            dpad_container.rowconfigure(i, weight=1, uniform="dpad_rows")
+        for text, r, c, func in dpad_config:
+            btn = tk.Button(dpad, text=text, font=("Arial", 16, "bold"), bg="#E0E0E0")
+            btn.grid(row=r, column=c, sticky="nsew", padx=5, pady=5)
+            btn.bind("<ButtonPress-1>", lambda e, f=func: f(True))
+            btn.bind("<ButtonRelease-1>", lambda e, f=func: f(False))
 
-        dpad_font = ("Arial", 16, "bold")
-
-        btn_up = tk.Button(dpad_container, text="UP", font=dpad_font, bg="#E0E0E0")
-        btn_up.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
-        btn_up.bind("<ButtonPress-1>", lambda e: self.hw.move_up(True))
-        btn_up.bind("<ButtonRelease-1>", lambda e: self.hw.move_up(False))
-
-        btn_down = tk.Button(dpad_container, text="DOWN", font=dpad_font, bg="#E0E0E0")
-        btn_down.grid(row=2, column=1, sticky="nsew", padx=5, pady=5)
-        btn_down.bind("<ButtonPress-1>", lambda e: self.hw.move_down(True))
-        btn_down.bind("<ButtonRelease-1>", lambda e: self.hw.move_down(False))
-
-        btn_backward = tk.Button(dpad_container, text="BACKWARD", font=dpad_font, bg="#E0E0E0")
-        btn_backward.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
-        btn_backward.bind("<ButtonPress-1>", lambda e: self.hw.move_backward(True))
-        btn_backward.bind("<ButtonRelease-1>", lambda e: self.hw.move_backward(False))
-
-        btn_forward = tk.Button(dpad_container, text="FORWARD", font=dpad_font, bg="#E0E0E0")
-        btn_forward.grid(row=1, column=2, sticky="nsew", padx=5, pady=5)
-        btn_forward.bind("<ButtonPress-1>", lambda e: self.hw.move_forward(True))
-        btn_forward.bind("<ButtonRelease-1>", lambda e: self.hw.move_forward(False))
-
-        # -- The Auto Level Button (Center of D-pad) --
-        self.btn_auto = tk.Button(dpad_container, text="AUTO\nLEVEL", font=("Arial", 12, "bold"), bg="#A9A9A9",
+        # Auto Level Button
+        self.btn_auto = tk.Button(dpad, text="AUTO\nLEVEL", font=("Arial", 12, "bold"), bg="#A9A9A9",
                                   command=self.toggle_auto_level)
         self.btn_auto.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
 
-        # -- Bottom Row: Back Button --
-        btn_back = tk.Button(self.motor_frame, text="Back", font=("Arial", 24, "bold"), bg="#A9A9A9",
-                             command=self.close_motor_menu, padx=20)
-        btn_back.grid(row=2, column=2, sticky="se", padx=40, pady=40)
+        # -- Back Button --
+        tk.Button(self.motor_frame, text="Back", font=("Arial", 24, "bold"), bg="#A9A9A9",
+                  command=self.close_motor_menu, padx=20).grid(row=2, column=2, sticky="se", padx=40, pady=40)
+
+    def open_motor_menu(self):
+        self.toggle_main_view(False)
+        self.motor_frame.grid(row=1, column=0, columnspan=2, rowspan=2, sticky="nsew")
+
+    def close_motor_menu(self):
+        self.leveller.stop()
+        self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9")
+        self.motor_frame.grid_remove()
+        self.toggle_main_view(True)
 
     # ==========================================
     # AUTO LEVEL LOGIC
@@ -308,42 +262,19 @@ class FlowcheckGUI:
             self.leveller.stop()
             self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9")
         else:
-            self.btn_auto.config(text="STOP\nLEVEL", bg="orange")  # Ensured text is 2 lines to prevent shrinking
+            self.btn_auto.config(text="STOP\nLEVEL", bg="orange")
             self.leveller.start(callback=self.auto_level_done)
 
     def auto_level_done(self, status):
-        """Called automatically by AutoLeveler.py when finished or crashed."""
         if status == "success":
             self.root.after(0, lambda: self.btn_auto.config(text="LEVEL\nOK", bg="green"))
-            # Use a timer thread to reset the button after 1.5 seconds so the GUI doesn't freeze
             threading.Timer(1.5, self.reset_auto_level_btn).start()
         else:
-            # If it errored out, reset immediately
             self.root.after(0, lambda: self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9"))
 
     def reset_auto_level_btn(self):
-        """Safely resets the button text from the timer thread."""
         if not self.leveller.is_running:
             self.root.after(0, lambda: self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9"))
-
-    # ==========================================
-    # MENU NAVIGATION
-    # ==========================================
-    def open_motor_menu(self):
-        self.video_container.grid_remove()
-        self.button_frame.grid_remove()
-        self.info_frame.grid_remove()
-
-        self.motor_frame.grid(row=1, column=0, columnspan=2, rowspan=2, sticky="nsew")
-
-    def close_motor_menu(self):
-        self.leveller.stop()  # Ensure leveller is shut off if user exits early
-        self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9")
-
-        self.motor_frame.grid_remove()
-        self.video_container.grid()
-        self.button_frame.grid()
-        self.info_frame.grid()
 
     # ==========================================
     # CORE FUNCTIONS
@@ -354,9 +285,7 @@ class FlowcheckGUI:
     def on_video_click(self, event):
         scale_x = 640 / self.current_w
         scale_y = 480 / self.current_h
-        native_x = int(event.x * scale_x)
-        native_y = int(event.y * scale_y)
-        self.camera.register_click(native_x, native_y)
+        self.camera.register_click(int(event.x * scale_x), int(event.y * scale_y))
 
     def on_r_keypress(self, event):
         self.camera.reset_depth()
@@ -381,19 +310,14 @@ class FlowcheckGUI:
                     container_aspect = cw / ch
 
                     if container_aspect > aspect:
-                        self.current_h = ch
-                        self.current_w = int(ch * aspect)
+                        self.current_h, self.current_w = ch, int(ch * aspect)
                     else:
-                        self.current_w = cw
-                        self.current_h = int(cw / aspect)
+                        self.current_w, self.current_h = cw, int(cw / aspect)
 
-                    self.last_cw = cw
-                    self.last_ch = ch
+                    self.last_cw, self.last_ch = cw, ch
 
                 frame_resized = cv2.resize(frame, (self.current_w, self.current_h), interpolation=cv2.INTER_LINEAR)
-                cv2_img = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(cv2_img)
-                imgtk = ImageTk.PhotoImage(image=pil_img)
+                imgtk = ImageTk.PhotoImage(image=Image.fromarray(cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)))
 
                 self.video_label.imgtk = imgtk
                 self.video_label.configure(image=imgtk)
