@@ -6,6 +6,7 @@ import threading
 import time
 import Defect_Masking
 import HardwareManager
+import AutoLeveler  # Imports the leveller script
 
 
 class FlowcheckGUI:
@@ -18,7 +19,6 @@ class FlowcheckGUI:
 
         self.current_w = 640
         self.current_h = 480
-
         self.last_cw = 0
         self.last_ch = 0
 
@@ -32,7 +32,6 @@ class FlowcheckGUI:
         # ==========================================
         # 2. TOP ROW: Header Frame (Left) & Info Frame (Right)
         # ==========================================
-        # -- LEFT SIDE: Logo & Version --
         self.header_frame = tk.Frame(self.root, bg="white")
         self.header_frame.grid(row=0, column=0, sticky="nw", padx=40, pady=(20, 10))
 
@@ -61,7 +60,6 @@ class FlowcheckGUI:
         )
         self.version_label.pack(side="left", padx=(15, 0), anchor="s", pady=(0, 15))
 
-        # -- RIGHT SIDE: Info Text --
         self.info_frame = tk.Frame(self.root, bg="white")
 
         self.lbl_cam_height = tk.Label(self.info_frame, text="Camera Height: --", bg="white", fg="black")
@@ -116,9 +114,13 @@ class FlowcheckGUI:
             btn.grid(row=0, column=i, sticky="nsew", padx=px)
 
         # ==========================================
-        # 5. Build Submenus & Set Default Layout
+        # 5. Script Initialization
         # ==========================================
         self.hw = HardwareManager.HardwareManager()
+        self.camera = Defect_Masking.DefectDetector()
+
+        # Link the leveller to the initialized hardware and camera
+        self.leveller = AutoLeveler.AutoLeveler(self.camera, self.hw)
 
         self.create_sku_menu()
         self.create_motor_menu()
@@ -127,10 +129,8 @@ class FlowcheckGUI:
         self.root.update_idletasks()
 
         # ==========================================
-        # 6. Initialize Camera & Threading
+        # 6. Threading & Video
         # ==========================================
-        self.camera = Defect_Masking.DefectDetector()
-
         self.latest_frame = None
         self.last_drawn_frame = None
         self.is_running = True
@@ -247,17 +247,15 @@ class FlowcheckGUI:
         self.motor_frame.rowconfigure(2, weight=1)
 
         # -- Top Row: Rotations --
-        # CW on Top Left
-        btn_cw = tk.Button(self.motor_frame, text="⟳", font=("Arial", 42, "bold"), bg="#E0E0E0", padx=15, pady=5)
-        btn_cw.grid(row=0, column=2, sticky="ne", padx=40, pady=30)
-        btn_cw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_cw(True))
-        btn_cw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_cw(False))
-
-        # CCW on Top Right
         btn_ccw = tk.Button(self.motor_frame, text="⟲", font=("Arial", 42, "bold"), bg="#E0E0E0", padx=15, pady=5)
         btn_ccw.grid(row=0, column=0, sticky="nw", padx=40, pady=30)
         btn_ccw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_ccw(True))
         btn_ccw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_ccw(False))
+
+        btn_cw = tk.Button(self.motor_frame, text="⟳", font=("Arial", 42, "bold"), bg="#E0E0E0", padx=15, pady=5)
+        btn_cw.grid(row=0, column=2, sticky="ne", padx=40, pady=30)
+        btn_cw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_cw(True))
+        btn_cw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_cw(False))
 
         # -- Center Row: D-Pad --
         dpad_container = tk.Frame(self.motor_frame, bg="white")
@@ -292,12 +290,45 @@ class FlowcheckGUI:
         btn_forward.bind("<ButtonPress-1>", lambda e: self.hw.move_forward(True))
         btn_forward.bind("<ButtonRelease-1>", lambda e: self.hw.move_forward(False))
 
+        # -- The Auto Level Button (Center of D-pad) --
+        self.btn_auto = tk.Button(dpad_container, text="AUTO\nLEVEL", font=("Arial", 12, "bold"), bg="#A9A9A9",
+                                  command=self.toggle_auto_level)
+        self.btn_auto.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
+
         # -- Bottom Row: Back Button --
-        # Back on Bottom Right
         btn_back = tk.Button(self.motor_frame, text="Back", font=("Arial", 24, "bold"), bg="#A9A9A9",
                              command=self.close_motor_menu, padx=20)
         btn_back.grid(row=2, column=2, sticky="se", padx=40, pady=40)
 
+    # ==========================================
+    # AUTO LEVEL LOGIC
+    # ==========================================
+    def toggle_auto_level(self):
+        if self.leveller.is_running:
+            self.leveller.stop()
+            self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9")
+        else:
+            self.btn_auto.config(text="STOP\nLEVEL", bg="orange")  # Ensured text is 2 lines to prevent shrinking
+            self.leveller.start(callback=self.auto_level_done)
+
+    def auto_level_done(self, status):
+        """Called automatically by AutoLeveler.py when finished or crashed."""
+        if status == "success":
+            self.root.after(0, lambda: self.btn_auto.config(text="LEVEL\nOK", bg="green"))
+            # Use a timer thread to reset the button after 1.5 seconds so the GUI doesn't freeze
+            threading.Timer(1.5, self.reset_auto_level_btn).start()
+        else:
+            # If it errored out, reset immediately
+            self.root.after(0, lambda: self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9"))
+
+    def reset_auto_level_btn(self):
+        """Safely resets the button text from the timer thread."""
+        if not self.leveller.is_running:
+            self.root.after(0, lambda: self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9"))
+
+    # ==========================================
+    # MENU NAVIGATION
+    # ==========================================
     def open_motor_menu(self):
         self.video_container.grid_remove()
         self.button_frame.grid_remove()
@@ -306,8 +337,10 @@ class FlowcheckGUI:
         self.motor_frame.grid(row=1, column=0, columnspan=2, rowspan=2, sticky="nsew")
 
     def close_motor_menu(self):
-        self.motor_frame.grid_remove()
+        self.leveller.stop()  # Ensure leveller is shut off if user exits early
+        self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9")
 
+        self.motor_frame.grid_remove()
         self.video_container.grid()
         self.button_frame.grid()
         self.info_frame.grid()
@@ -369,6 +402,7 @@ class FlowcheckGUI:
 
     def on_closing(self):
         self.is_running = False
+        self.leveller.stop()
         self.camera.stop()
         self.hw.shutdown()
         self.root.destroy()

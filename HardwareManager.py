@@ -6,8 +6,8 @@ import time
 # Hardware Pins
 MOTOR_A_PIN1 = 17  # Forward
 MOTOR_A_PIN2 = 27  # Backward
-MOTOR_B_PIN1 = 24  # Up
-MOTOR_B_PIN2 = 23  # Down
+MOTOR_B_PIN1 = 23  # Up
+MOTOR_B_PIN2 = 24  # Down
 SERVO_PIN = 18  # CW / CCW
 
 
