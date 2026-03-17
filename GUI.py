@@ -249,13 +249,13 @@ class FlowcheckGUI:
         # -- Top Row: Rotations --
         # CW on Top Left
         btn_cw = tk.Button(self.motor_frame, text="⟳", font=("Arial", 42, "bold"), bg="#E0E0E0", padx=15, pady=5)
-        btn_cw.grid(row=0, column=0, sticky="nw", padx=40, pady=30)
+        btn_cw.grid(row=0, column=2, sticky="ne", padx=40, pady=30)
         btn_cw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_cw(True))
         btn_cw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_cw(False))
 
         # CCW on Top Right
         btn_ccw = tk.Button(self.motor_frame, text="⟲", font=("Arial", 42, "bold"), bg="#E0E0E0", padx=15, pady=5)
-        btn_ccw.grid(row=0, column=2, sticky="ne", padx=40, pady=30)
+        btn_ccw.grid(row=0, column=0, sticky="nw", padx=40, pady=30)
         btn_ccw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_ccw(True))
         btn_ccw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_ccw(False))
 
