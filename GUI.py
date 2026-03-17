@@ -5,6 +5,7 @@ import os
 import threading
 import time
 import Defect_Masking
+import HardwareManager
 
 
 class FlowcheckGUI:
@@ -24,7 +25,6 @@ class FlowcheckGUI:
         # ==========================================
         # 1. MAIN WINDOW GRID LAYOUT
         # ==========================================
-        # Initial grid config; dynamic sizing is handled by apply_sku_layout()
         self.root.rowconfigure(0, weight=0)
         self.root.rowconfigure(1, weight=1)
         self.root.rowconfigure(2, weight=0)
@@ -97,7 +97,7 @@ class FlowcheckGUI:
             {"text": "Select SKU", "command": self.open_sku_menu, "bg": "#A9A9A9"},
             {"text": "", "command": None, "bg": "#A9A9A9"},
             {"text": "", "command": None, "bg": "#A9A9A9"},
-            {"text": "", "command": None, "bg": "#A9A9A9"},
+            {"text": "Manual Motor\nControl", "command": self.open_motor_menu, "bg": "#A9A9A9"},
             {"text": "Toggle Debug", "command": None, "bg": "#A9A9A9"},
             {"text": "STOP", "command": self.on_closing, "bg": "red"}
         ]
@@ -118,9 +118,11 @@ class FlowcheckGUI:
         # ==========================================
         # 5. Build Submenus & Set Default Layout
         # ==========================================
-        self.create_sku_menu()
+        self.hw = HardwareManager.HardwareManager()
 
-        # Set "Strada (Shower Base)" as the default layout on boot
+        self.create_sku_menu()
+        self.create_motor_menu()
+
         self.apply_sku_layout("Strada\n(Shower Base)")
         self.root.update_idletasks()
 
@@ -139,7 +141,6 @@ class FlowcheckGUI:
         self.update_video()
 
     def frame_capture_thread(self):
-        """Runs continuously in the background to fetch frames."""
         while self.is_running:
             try:
                 frame = self.camera.get_frame()
@@ -150,7 +151,7 @@ class FlowcheckGUI:
             time.sleep(0.01)
 
     # ==========================================
-    # SUBMENU LOGIC
+    # SKU SUBMENU LOGIC
     # ==========================================
     def create_sku_menu(self):
         self.sku_frame = tk.Frame(self.root, bg="white")
@@ -189,16 +190,12 @@ class FlowcheckGUI:
         self.close_sku_menu()
 
     def apply_sku_layout(self, sku_name):
-        """Dynamically adjusts the grid proportions and text based on the selected SKU."""
         if sku_name in ["Strada\n(Shower Base)", "(Skirted Tub)"]:
-            # EXPANDED LAYOUT: 60% / 40% split to prevent text cutoff
             self.root.columnconfigure(0, weight=3, uniform="expanded_cols")
             self.root.columnconfigure(1, weight=2, uniform="expanded_cols")
 
-            # Push camera container as far left as possible
             self.video_container.grid(row=1, column=0, sticky="nsew", padx=(10, 10), pady=10)
 
-            # Center text in row 1, slightly adjust font size
             large_font = ("Arial", 28, "bold")
             self.lbl_cam_height.config(font=large_font)
             self.lbl_tub_detected.config(font=large_font)
@@ -208,14 +205,11 @@ class FlowcheckGUI:
             self.info_frame.grid_configure(row=1, column=1, rowspan=1, sticky="w", padx=(10, 20), pady=0)
 
         elif sku_name == "(Tub-Shower)":
-            # DEFAULT LAYOUT: 50/50 screen split
             self.root.columnconfigure(0, weight=1, uniform="main_cols")
             self.root.columnconfigure(1, weight=1, uniform="main_cols")
 
-            # Restore standard camera container padding
             self.video_container.grid(row=1, column=0, sticky="nsew", padx=(40, 20), pady=10)
 
-            # Move text back to top right
             default_font = ("Arial", 24, "bold")
             self.lbl_cam_height.config(font=default_font)
             self.lbl_tub_detected.config(font=default_font)
@@ -239,6 +233,86 @@ class FlowcheckGUI:
         self.info_frame.grid()
 
     # ==========================================
+    # MOTOR SUBMENU LOGIC
+    # ==========================================
+    def create_motor_menu(self):
+        self.motor_frame = tk.Frame(self.root, bg="white")
+
+        self.motor_frame.columnconfigure(0, weight=1)
+        self.motor_frame.columnconfigure(1, weight=3)
+        self.motor_frame.columnconfigure(2, weight=1)
+
+        self.motor_frame.rowconfigure(0, weight=1)
+        self.motor_frame.rowconfigure(1, weight=3)
+        self.motor_frame.rowconfigure(2, weight=1)
+
+        # -- Top Row: Rotations --
+        # CW on Top Left
+        btn_cw = tk.Button(self.motor_frame, text="⟳", font=("Arial", 42, "bold"), bg="#E0E0E0", padx=15, pady=5)
+        btn_cw.grid(row=0, column=0, sticky="nw", padx=40, pady=30)
+        btn_cw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_cw(True))
+        btn_cw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_cw(False))
+
+        # CCW on Top Right
+        btn_ccw = tk.Button(self.motor_frame, text="⟲", font=("Arial", 42, "bold"), bg="#E0E0E0", padx=15, pady=5)
+        btn_ccw.grid(row=0, column=2, sticky="ne", padx=40, pady=30)
+        btn_ccw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_ccw(True))
+        btn_ccw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_ccw(False))
+
+        # -- Center Row: D-Pad --
+        dpad_container = tk.Frame(self.motor_frame, bg="white")
+        dpad_container.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
+
+        dpad_container.columnconfigure(0, weight=5)
+        dpad_container.columnconfigure(1, weight=4)
+        dpad_container.columnconfigure(2, weight=5)
+
+        for i in range(3):
+            dpad_container.rowconfigure(i, weight=1, uniform="dpad_rows")
+
+        dpad_font = ("Arial", 16, "bold")
+
+        btn_up = tk.Button(dpad_container, text="UP", font=dpad_font, bg="#E0E0E0")
+        btn_up.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        btn_up.bind("<ButtonPress-1>", lambda e: self.hw.move_up(True))
+        btn_up.bind("<ButtonRelease-1>", lambda e: self.hw.move_up(False))
+
+        btn_down = tk.Button(dpad_container, text="DOWN", font=dpad_font, bg="#E0E0E0")
+        btn_down.grid(row=2, column=1, sticky="nsew", padx=5, pady=5)
+        btn_down.bind("<ButtonPress-1>", lambda e: self.hw.move_down(True))
+        btn_down.bind("<ButtonRelease-1>", lambda e: self.hw.move_down(False))
+
+        btn_backward = tk.Button(dpad_container, text="BACKWARD", font=dpad_font, bg="#E0E0E0")
+        btn_backward.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        btn_backward.bind("<ButtonPress-1>", lambda e: self.hw.move_backward(True))
+        btn_backward.bind("<ButtonRelease-1>", lambda e: self.hw.move_backward(False))
+
+        btn_forward = tk.Button(dpad_container, text="FORWARD", font=dpad_font, bg="#E0E0E0")
+        btn_forward.grid(row=1, column=2, sticky="nsew", padx=5, pady=5)
+        btn_forward.bind("<ButtonPress-1>", lambda e: self.hw.move_forward(True))
+        btn_forward.bind("<ButtonRelease-1>", lambda e: self.hw.move_forward(False))
+
+        # -- Bottom Row: Back Button --
+        # Back on Bottom Right
+        btn_back = tk.Button(self.motor_frame, text="Back", font=("Arial", 24, "bold"), bg="#A9A9A9",
+                             command=self.close_motor_menu, padx=20)
+        btn_back.grid(row=2, column=2, sticky="se", padx=40, pady=40)
+
+    def open_motor_menu(self):
+        self.video_container.grid_remove()
+        self.button_frame.grid_remove()
+        self.info_frame.grid_remove()
+
+        self.motor_frame.grid(row=1, column=0, columnspan=2, rowspan=2, sticky="nsew")
+
+    def close_motor_menu(self):
+        self.motor_frame.grid_remove()
+
+        self.video_container.grid()
+        self.button_frame.grid()
+        self.info_frame.grid()
+
+    # ==========================================
     # CORE FUNCTIONS
     # ==========================================
     def escape_fullscreen(self, event=None):
@@ -255,13 +329,11 @@ class FlowcheckGUI:
         self.camera.reset_depth()
 
     def update_video(self):
-        # 1. Update UI Labels from Camera Data
         if self.camera.ref_depth is not None:
             self.lbl_cam_height.config(text=f"Camera Height: {self.camera.ref_depth:.3f} m")
         else:
             self.lbl_cam_height.config(text="Camera Height: --")
 
-        # 2. Update Video Feed
         frame = self.latest_frame
 
         if frame is not None and frame is not self.last_drawn_frame:
@@ -298,6 +370,7 @@ class FlowcheckGUI:
     def on_closing(self):
         self.is_running = False
         self.camera.stop()
+        self.hw.shutdown()
         self.root.destroy()
 
 
