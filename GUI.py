@@ -52,7 +52,6 @@ class FlowcheckGUI:
 
         self.info_frame = tk.Frame(self.root, bg="white")
 
-        # Grouped labels for easy batch-updating later
         self.info_labels = [
             tk.Label(self.info_frame, text="Camera Height: --", bg="white", fg="black"),
             tk.Label(self.info_frame, text="Tub Detected: --", bg="white", fg="black"),
@@ -60,7 +59,7 @@ class FlowcheckGUI:
             tk.Label(self.info_frame, text="Units Scanned: --", bg="white", fg="black")
         ]
 
-        self.lbl_cam_height = self.info_labels[0]  # Keep reference for updating text
+        self.lbl_cam_height = self.info_labels[0]
 
         for lbl in self.info_labels:
             lbl.pack(anchor="w", pady=6)
@@ -103,7 +102,9 @@ class FlowcheckGUI:
         # ==========================================
         self.hw = HardwareManager.HardwareManager()
         self.camera = Defect_Masking.DefectDetector()
-        self.leveller = AutoLeveler.AutoLeveler(self.camera, self.hw)
+
+        # Link the leveller back to the raw hardware device and motor controller
+        self.leveller = AutoLeveler.AutoLeveler(self.camera.device, self.hw)
 
         self.create_sku_menu()
         self.create_motor_menu()
@@ -132,7 +133,6 @@ class FlowcheckGUI:
     # VIEW TOGGLING HELPER
     # ==========================================
     def toggle_main_view(self, show=True):
-        """Hides or shows the main screen elements to make room for submenus."""
         if show:
             self.video_container.grid()
             self.button_frame.grid()
@@ -201,7 +201,6 @@ class FlowcheckGUI:
         for i in range(3): self.motor_frame.columnconfigure(i, weight=3 if i == 1 else 1)
         for i in range(3): self.motor_frame.rowconfigure(i, weight=3 if i == 1 else 1)
 
-        # -- Rotations --
         rot_font = ("Arial", 42, "bold")
 
         btn_cw = tk.Button(self.motor_frame, text="⟳", font=rot_font, bg="#E0E0E0", padx=15, pady=5)
@@ -214,7 +213,6 @@ class FlowcheckGUI:
         btn_ccw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_ccw(True))
         btn_ccw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_ccw(False))
 
-        # -- Center Row: D-Pad --
         dpad = tk.Frame(self.motor_frame, bg="white")
         dpad.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
         dpad.columnconfigure(0, weight=5);
@@ -235,46 +233,26 @@ class FlowcheckGUI:
             btn.bind("<ButtonPress-1>", lambda e, f=func: f(True))
             btn.bind("<ButtonRelease-1>", lambda e, f=func: f(False))
 
-        # Auto Level Button
+        # Auto Level Button (One-shot command)
         self.btn_auto = tk.Button(dpad, text="AUTO\nLEVEL", font=("Arial", 12, "bold"), bg="#A9A9A9",
-                                  command=self.toggle_auto_level)
+                                  command=self.start_auto_level)
         self.btn_auto.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
 
-        # -- Back Button --
         tk.Button(self.motor_frame, text="Back", font=("Arial", 24, "bold"), bg="#A9A9A9",
                   command=self.close_motor_menu, padx=20).grid(row=2, column=2, sticky="se", padx=40, pady=40)
+
+    def start_auto_level(self):
+        """Fires the auto-level background script."""
+        self.leveller.start()
 
     def open_motor_menu(self):
         self.toggle_main_view(False)
         self.motor_frame.grid(row=1, column=0, columnspan=2, rowspan=2, sticky="nsew")
 
     def close_motor_menu(self):
-        self.leveller.stop()
-        self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9")
+        self.leveller.stop()  # Stops it if they back out while it's actively seeking level
         self.motor_frame.grid_remove()
         self.toggle_main_view(True)
-
-    # ==========================================
-    # AUTO LEVEL LOGIC
-    # ==========================================
-    def toggle_auto_level(self):
-        if self.leveller.is_running:
-            self.leveller.stop()
-            self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9")
-        else:
-            self.btn_auto.config(text="STOP\nLEVEL", bg="orange")
-            self.leveller.start(callback=self.auto_level_done)
-
-    def auto_level_done(self, status):
-        if status == "success":
-            self.root.after(0, lambda: self.btn_auto.config(text="LEVEL\nOK", bg="green"))
-            threading.Timer(1.5, self.reset_auto_level_btn).start()
-        else:
-            self.root.after(0, lambda: self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9"))
-
-    def reset_auto_level_btn(self):
-        if not self.leveller.is_running:
-            self.root.after(0, lambda: self.btn_auto.config(text="AUTO\nLEVEL", bg="#A9A9A9"))
 
     # ==========================================
     # CORE FUNCTIONS
@@ -326,7 +304,7 @@ class FlowcheckGUI:
 
     def on_closing(self):
         self.is_running = False
-        self.leveller.stop()
+        self.leveller.shutdown()  # Changed to shutdown to release the independent IMU sensor
         self.camera.stop()
         self.hw.shutdown()
         self.root.destroy()
