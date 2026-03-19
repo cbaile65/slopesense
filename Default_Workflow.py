@@ -1,6 +1,7 @@
 import threading
 import time
 
+
 class StradaWorkflow:
     def __init__(self, gui_app, leveller, drainer, drain_watcher):
         self.gui = gui_app
@@ -47,6 +48,12 @@ class StradaWorkflow:
                     # Drain lost -> tub is gone -> re-arm full cycle
                     if not drain_seen and self.last_drain_seen_state:
                         print("[Strada Workflow] Drain disappeared. Re-arming next cycle.")
+
+                        # <-- UPDATED: Increment count if the tub was fully processed before it left
+                        if self.current_tub_processed:
+                            print("[Strada Workflow] Tub successfully processed and removed. Incrementing count.")
+                            self.gui.increment_tub_count()
+
                         self.current_tub_has_drain = False
                         self.current_tub_processed = False
                         self.autolevel_done_for_current_tub = False

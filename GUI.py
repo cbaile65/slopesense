@@ -26,6 +26,7 @@ class FlowcheckGUI:
         # Start / stop and workflow state
         self.scan_active = False
         self.selected_sku = None
+        self.tubs_scanned = 0  # <-- NEW: Counter for tubs processed
 
         # Debug Mode State
         self.debug_mode = False
@@ -72,14 +73,17 @@ class FlowcheckGUI:
         self.info_frame = tk.Frame(self.root, bg="white")
 
         self.info_labels = [
+            tk.Label(self.info_frame, text="SKU: None", bg="white", fg="#0044cc"),  # <-- NEW: SKU Label
             tk.Label(self.info_frame, text="Camera Height: --", bg="white", fg="black"),
             tk.Label(self.info_frame, text="Drain Detected: --", bg="white", fg="black"),
             tk.Label(self.info_frame, text="Defects Detected: --", bg="white", fg="black"),
-            tk.Label(self.info_frame, text="Units Scanned: --", bg="white", fg="black")
+            tk.Label(self.info_frame, text="Units Scanned: 0", bg="white", fg="black")
         ]
 
-        self.lbl_cam_height = self.info_labels[0]
-        self.lbl_drain_detected = self.info_labels[1]
+        self.lbl_sku = self.info_labels[0]
+        self.lbl_cam_height = self.info_labels[1]
+        self.lbl_drain_detected = self.info_labels[2]
+        self.lbl_units_scanned = self.info_labels[4]
 
         for lbl in self.info_labels:
             lbl.pack(anchor="w", pady=6)
@@ -88,7 +92,7 @@ class FlowcheckGUI:
         # 3. MIDDLE ROW: Video Feed
         # ==========================================
         self.video_container = tk.Frame(self.root, bg="white")
-        self.video_label = tk.Label(self.video_container, bg="white")
+        self.video_label = tk.Label(self.video_container, bg="black")
         self.video_label.place(relx=0.5, rely=0.5, anchor="center")
 
         self.video_label.bind("<Button-1>", self.on_video_click)
@@ -110,7 +114,7 @@ class FlowcheckGUI:
             ("Select SKU", self.open_sku_menu, "#A9A9A9"),
             ("", None, "#A9A9A9"),
             ("Manual Motor\nControl", self.open_motor_menu, "#A9A9A9"),
-            ("Toggle Debug", self.toggle_debug, "#A9A9A9"),  # <-- UPDATED: Wired up button
+            ("Toggle Debug", self.toggle_debug, "#A9A9A9"),
             ("CLOSE", self.on_closing, "orange")
         ]
 
@@ -131,7 +135,37 @@ class FlowcheckGUI:
         # 5. Initialization & Threading
         # ==========================================
         self.hw = HardwareManager.HardwareManager()
-        self.camera = Defect_Masking.DefectDetector()
+
+        # Safely try to initialize the camera
+        try:
+            self.camera = Defect_Masking.DefectDetector()
+        except Exception as e:
+            print(f"Camera not detected on startup: {e}")
+
+            # Dummy class to prevent other modules from crashing
+            class DummyCamera:
+                def __init__(self):
+                    self.device = None
+                    self.ref_depth = None
+
+                def get_frame(self): return None
+
+                def stop(self): pass
+
+                def register_click(self, x, y): pass
+
+                def reset_depth(self): pass
+
+            self.camera = DummyCamera()
+
+        # Create the fallback "No Camera Detected" frame
+        self.no_camera_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        text = "NO CAMERA DETECTED"
+        text_size = cv2.getTextSize(text, font, 1.2, 3)[0]
+        text_x = (640 - text_size[0]) // 2
+        text_y = (480 + text_size[1]) // 2
+        cv2.putText(self.no_camera_frame, text, (text_x, text_y), font, 1.2, (255, 255, 255), 3)
 
         self.leveller = AutoLeveler.AutoLeveler(self.camera.device, self.hw)
         self.drainer = Centering.AutoDrainer(self.camera)
@@ -143,8 +177,8 @@ class FlowcheckGUI:
         self.create_sku_menu()
         self.create_motor_menu()
 
-        self.apply_sku_layout("Strada\n(Shower Base)")
-        self.selected_sku = "Strada\n(Shower Base)"
+        # Load default SKU & Layout
+        self.select_sku("Strada\n(Shower Base)")
         self.root.update_idletasks()
 
         self.latest_frame = None
@@ -158,18 +192,19 @@ class FlowcheckGUI:
         while self.is_running:
             try:
                 frame = self.camera.get_frame()
-                if frame is not None:
-                    self.latest_frame = frame
+                self.latest_frame = frame  # Will safely become None if the camera disconnects
 
+                if frame is not None:
                     # Feed current image into both centering + watcher
                     self.drainer.raw_color = frame
                     self.drain_watcher.raw_color = frame
 
-                    if hasattr(self.camera, "depth_stack"):
+                    if hasattr(self.camera, "depth_stack") and len(self.camera.depth_stack) > 0:
                         self.drainer.raw_depth = self.camera.depth_stack[0]
 
             except Exception as e:
                 print(f"Camera thread error: {e}")
+                self.latest_frame = None
 
             time.sleep(0.01)
 
@@ -217,6 +252,13 @@ class FlowcheckGUI:
 
     def select_sku(self, sku_name):
         self.selected_sku = sku_name
+        self.tubs_scanned = 0  # <-- NEW: Reset count when SKU changes
+
+        # Format the SKU name to be single line if it has newlines
+        display_name = sku_name.replace('\n', ' ')
+        self.lbl_sku.config(text=f"SKU: {display_name}")
+        self.lbl_units_scanned.config(text=f"Units Scanned: {self.tubs_scanned}")
+
         self.apply_sku_layout(sku_name)
         self.close_sku_menu()
 
@@ -230,6 +272,8 @@ class FlowcheckGUI:
             for lbl in self.info_labels:
                 lbl.config(font=("Arial", 28, "bold"))
 
+            self.lbl_sku.config(font=("Arial", 20, "bold"), fg="#0044cc")  # Make it fit perfectly on one line
+
         elif sku_name == "(Tub-Shower)":
             self.root.columnconfigure(0, weight=1, uniform="main_cols")
             self.root.columnconfigure(1, weight=1, uniform="main_cols")
@@ -238,6 +282,8 @@ class FlowcheckGUI:
 
             for lbl in self.info_labels:
                 lbl.config(font=("Arial", 24, "bold"))
+
+            self.lbl_sku.config(font=("Arial", 18, "bold"), fg="#0044cc")  # Make it fit perfectly on one line
 
     def open_sku_menu(self):
         self.toggle_main_view(False)
@@ -340,11 +386,9 @@ class FlowcheckGUI:
             self.strada_workflow.start_workflow()
 
     def toggle_debug(self):
-        """Toggles the debug popup window on and off."""
         self.debug_mode = not self.debug_mode
         if self.debug_mode:
             self.main_buttons[4].config(bg="green")
-            # If centering is currently happening, show the window immediately
             if self.drainer.is_running:
                 self.open_drain_window()
         else:
@@ -361,6 +405,14 @@ class FlowcheckGUI:
         self.btn_drain.config(bg="#A9A9A9")
         self.close_drain_window()
         self.reset_drain_status()
+
+    def increment_tub_count(self):
+        # <-- NEW: Updates the UI safely from the main thread
+        def _update():
+            self.tubs_scanned += 1
+            self.lbl_units_scanned.config(text=f"Units Scanned: {self.tubs_scanned}")
+
+        self.root.after(0, _update)
 
     # --- AUTO LEVEL ---
     def start_auto_level(self):
@@ -379,7 +431,6 @@ class FlowcheckGUI:
             )
 
     def open_drain_window(self):
-        # <-- UPDATED: The gatekeeper that blocks the window when not in Debug mode
         if not self.debug_mode:
             return
 
@@ -488,9 +539,10 @@ class FlowcheckGUI:
         else:
             self.lbl_cam_height.config(text="Camera Height: --")
 
-        frame = self.latest_frame
+        # Inject the fallback frame if the camera is missing
+        frame = self.latest_frame if self.latest_frame is not None else self.no_camera_frame
 
-        if frame is not None and frame is not self.last_drawn_frame:
+        if frame is not self.last_drawn_frame:
             self.last_drawn_frame = frame
 
             cw = self.video_container.winfo_width()
