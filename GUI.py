@@ -4,9 +4,11 @@ import cv2
 import os
 import threading
 import time
+import numpy as np
 import Defect_Masking
 import HardwareManager
 import AutoLeveler
+import Centering
 
 
 class FlowcheckGUI:
@@ -19,6 +21,9 @@ class FlowcheckGUI:
 
         self.current_w, self.current_h = 640, 480
         self.last_cw, self.last_ch = 0, 0
+
+        # Used for the Start/Stop toggle button
+        self.scan_active = False
 
         # ==========================================
         # 1. MAIN WINDOW GRID LAYOUT
@@ -83,19 +88,22 @@ class FlowcheckGUI:
         for col in range(6):
             self.button_frame.columnconfigure(col, weight=1, uniform="btn_cols")
 
+        self.main_buttons = []
+
         button_config = [
+            ("START", self.toggle_start_stop, "green"),
             ("Select SKU", self.open_sku_menu, "#A9A9A9"),
-            ("", None, "#A9A9A9"),
             ("", None, "#A9A9A9"),
             ("Manual Motor\nControl", self.open_motor_menu, "#A9A9A9"),
             ("Toggle Debug", None, "#A9A9A9"),
-            ("STOP", self.on_closing, "red")
+            ("CLOSE", self.on_closing, "orange")
         ]
 
         for i, (text, cmd, bg_color) in enumerate(button_config):
             btn = tk.Button(self.button_frame, text=text, font=("Arial", 16, "bold"), bg=bg_color, fg="black", height=3,
                             command=cmd)
             btn.grid(row=0, column=i, sticky="nsew", padx=(0, 15) if i < 5 else 0)
+            self.main_buttons.append(btn)
 
         # ==========================================
         # 5. Initialization & Threading
@@ -103,8 +111,8 @@ class FlowcheckGUI:
         self.hw = HardwareManager.HardwareManager()
         self.camera = Defect_Masking.DefectDetector()
 
-        # Link the leveller back to the raw hardware device and motor controller
         self.leveller = AutoLeveler.AutoLeveler(self.camera.device, self.hw)
+        self.drainer = Centering.AutoDrainer(self.camera)
 
         self.create_sku_menu()
         self.create_motor_menu()
@@ -125,6 +133,11 @@ class FlowcheckGUI:
                 frame = self.camera.get_frame()
                 if frame is not None:
                     self.latest_frame = frame
+
+                    self.drainer.raw_color = frame
+                    if hasattr(self.camera, 'depth_stack'):
+                        self.drainer.raw_depth = self.camera.depth_stack[0]
+
             except Exception as e:
                 print(f"Camera thread error: {e}")
             time.sleep(0.01)
@@ -213,6 +226,21 @@ class FlowcheckGUI:
         btn_ccw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_ccw(True))
         btn_ccw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_ccw(False))
 
+        # --- CENTER DRAIN BUTTON ALIGNMENT FIX ---
+        # We put it in a transparent container that mathematically matches the column weights of the D-Pad below it.
+        # This aligns it perfectly vertically with the rotation buttons, and guarantees identical dimensions to the AUTO LEVEL button!
+        drain_container = tk.Frame(self.motor_frame, bg="white")
+        drain_container.grid(row=0, column=1, sticky="nsew", padx=5, pady=25)
+        drain_container.columnconfigure(0, weight=5)
+        drain_container.columnconfigure(1, weight=4)
+        drain_container.columnconfigure(2, weight=5)
+        drain_container.rowconfigure(0, weight=1)
+
+        self.btn_drain = tk.Button(drain_container, text="CENTER\nDRAIN", font=("Arial", 16, "bold"), bg="#A9A9A9",
+                                   command=self.toggle_auto_drain)
+        self.btn_drain.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+
+        # --- D-PAD ---
         dpad = tk.Frame(self.motor_frame, bg="white")
         dpad.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
         dpad.columnconfigure(0, weight=5);
@@ -233,7 +261,7 @@ class FlowcheckGUI:
             btn.bind("<ButtonPress-1>", lambda e, f=func: f(True))
             btn.bind("<ButtonRelease-1>", lambda e, f=func: f(False))
 
-        # Auto Level Button (One-shot command)
+        # Auto Level Button
         self.btn_auto = tk.Button(dpad, text="AUTO\nLEVEL", font=("Arial", 12, "bold"), bg="#A9A9A9",
                                   command=self.start_auto_level)
         self.btn_auto.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
@@ -241,16 +269,73 @@ class FlowcheckGUI:
         tk.Button(self.motor_frame, text="Back", font=("Arial", 24, "bold"), bg="#A9A9A9",
                   command=self.close_motor_menu, padx=20).grid(row=2, column=2, sticky="se", padx=40, pady=40)
 
+    # --- MAIN MENU LOGIC ---
+    def toggle_start_stop(self):
+        if self.scan_active:
+            self.scan_active = False
+            self.main_buttons[0].config(text="START", bg="green")
+            print("Scan Stopped.")
+        else:
+            self.scan_active = True
+            self.main_buttons[0].config(text="STOP", bg="red")
+            print("Scan Started.")
+
+    # --- AUTO LEVEL ---
     def start_auto_level(self):
-        """Fires the auto-level background script."""
         self.leveller.start()
 
+    # --- AUTO DRAIN ---
+    def toggle_auto_drain(self):
+        if self.drainer.is_running:
+            self.drainer.stop()
+        else:
+            self.btn_drain.config(bg="green")
+            self.drainer.start(callback=self.auto_drain_done)
+            self.open_drain_window()
+
+    def open_drain_window(self):
+        self.drain_win = tk.Toplevel(self.root)
+        self.drain_win.title("Auto Drain Tracking")
+        self.drain_win.geometry("640x480")
+        self.drain_win.configure(bg="black")
+
+        self.drain_label = tk.Label(self.drain_win, bg="black")
+        self.drain_label.pack(expand=True, fill="both")
+
+        self.update_drain_window()
+
+    def update_drain_window(self):
+        if not self.drainer.is_running:
+            if hasattr(self, 'drain_win') and self.drain_win.winfo_exists():
+                self.drain_win.destroy()
+            return
+
+        frame = getattr(self.drainer, 'display_frame', None)
+
+        if frame is not None:
+            try:
+                cv2_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(cv2_img)
+                imgtk = ImageTk.PhotoImage(image=pil_img)
+
+                self.drain_label.imgtk = imgtk
+                self.drain_label.configure(image=imgtk)
+            except Exception as e:
+                print(f"Drain Popup Error: {e}")
+
+        self.root.after(30, self.update_drain_window)
+
+    def auto_drain_done(self, status):
+        self.root.after(0, lambda: self.btn_drain.config(bg="#A9A9A9"))
+
+    # --- MENU NAVIGATION ---
     def open_motor_menu(self):
         self.toggle_main_view(False)
         self.motor_frame.grid(row=1, column=0, columnspan=2, rowspan=2, sticky="nsew")
 
     def close_motor_menu(self):
-        self.leveller.stop()  # Stops it if they back out while it's actively seeking level
+        self.leveller.stop()
+        self.drainer.stop()
         self.motor_frame.grid_remove()
         self.toggle_main_view(True)
 
@@ -304,7 +389,8 @@ class FlowcheckGUI:
 
     def on_closing(self):
         self.is_running = False
-        self.leveller.shutdown()  # Changed to shutdown to release the independent IMU sensor
+        self.drainer.stop()
+        self.leveller.shutdown()
         self.camera.stop()
         self.hw.shutdown()
         self.root.destroy()

@@ -72,14 +72,15 @@ class AutoLeveler:
             while self.is_running:
 
                 # --- WATCHDOG TIMEOUT ---
-                # If we've been trying to level for 8 seconds, the motor is physically stuck.
+                # If we've been trying to level for 5 seconds, the motor is physically stuck.
                 # Break the loop so the button doesn't get permanently locked out.
-                if time.time() - start_time > 8.0:
+                if time.time() - start_time > 5.0:
                     print("[AutoLeveler] TIMEOUT: Motor stalled or took too long. Shutting down.")
                     break
 
                 # 1. Math
-                diff = self.roll - TARGET_ANGLE
+                # Use shortest path math to guarantee it never takes the long way around
+                diff = (self.roll - TARGET_ANGLE + 180.0) % 360.0 - 180.0
                 abs_diff = abs(diff)
 
                 print(f"[AutoLevel] Roll: {self.roll:.2f}° | Diff: {diff:.2f}°")
@@ -114,7 +115,8 @@ class AutoLeveler:
 
                 else:
                     # ZONE 3: Far away, move continuously
-                    time.sleep(0.05)
+                    # Slowed to 0.2s so the network queue doesn't clog and the stop command fires instantly
+                    time.sleep(0.2)
 
         except Exception as e:
             print(f"[AutoLevel Error] {e}")
