@@ -242,6 +242,182 @@ def find_drain_local(img, last_x, last_y):
 
 
 # =========================================================
+# PASSIVE DRAIN WATCHER (NO MOTOR MOTION)
+# =========================================================
+class DrainWatcher:
+    def __init__(self, camera):
+        self.camera = camera
+        self.is_running = False
+        self.thread = None
+        self.callback = None
+        self.status_callback = None
+
+        self.raw_color = None
+        self.display_frame = None
+
+        self.drain_present = False
+
+        # Current locked drain state
+        self.locked_drain_ready = False
+        self.locked_drain = None
+
+        # One-shot event for GUI workflow
+        self.new_lock_event = False
+
+    def start(self, callback=None, status_callback=None):
+        self.callback = callback
+        self.status_callback = status_callback
+
+        self.locked_drain_ready = False
+        self.locked_drain = None
+        self.new_lock_event = False
+        self._update_drain_present(False)
+
+        if not self.is_running:
+            self.is_running = True
+            self.thread = threading.Thread(target=self._run, daemon=True)
+            self.thread.start()
+
+    def stop(self):
+        was_running = self.is_running
+        self.is_running = False
+        self.locked_drain_ready = False
+        self.locked_drain = None
+        self.new_lock_event = False
+        self._update_drain_present(False)
+
+        if was_running and self.callback:
+            try:
+                self.callback("stopped")
+            except Exception:
+                pass
+
+    def consume_new_lock_event(self):
+        if self.new_lock_event:
+            self.new_lock_event = False
+            return True
+        return False
+
+    def _update_drain_present(self, drain_present):
+        drain_present = bool(drain_present)
+        changed = drain_present != self.drain_present
+        self.drain_present = drain_present
+
+        if self.status_callback and changed:
+            try:
+                self.status_callback(drain_present)
+            except Exception:
+                pass
+
+    def _run(self):
+        print("\n--- Passive Drain Watcher Started ---")
+
+        tracked_x, tracked_y, tracked_r = None, None, None
+        candidate_x, candidate_y, candidate_r, candidate_count = None, None, None, 0
+        startup_time = time.time()
+
+        # how many frames of misses before fully abandoning old tracking
+        miss_count = 0
+        MISS_RESET_FRAMES = 5
+
+        try:
+            while self.is_running:
+                if self.raw_color is None:
+                    time.sleep(LOOP_DELAY)
+                    continue
+
+                color_img = self.raw_color.copy()
+                display_img = color_img.copy()
+                status = ""
+                drain_seen_this_frame = False
+
+                if time.time() - startup_time < STARTUP_WAIT_S:
+                    status = "waiting before search"
+
+                else:
+                    drain = None
+
+                    # Try local tracking first if we had a locked drain
+                    if tracked_x is not None and tracked_y is not None:
+                        drain = find_drain_local(color_img, tracked_x, tracked_y)
+
+                    # If local failed, fall back to full global search immediately
+                    if drain is None:
+                        drain = auto_find_drain(color_img)
+
+                    if drain is None:
+                        miss_count += 1
+                        status = f"searching for drain ({miss_count})"
+
+                        if miss_count >= MISS_RESET_FRAMES:
+                            tracked_x, tracked_y, tracked_r = None, None, None
+                            candidate_x, candidate_y, candidate_r, candidate_count = None, None, None, 0
+                            self.locked_drain_ready = False
+                            self.locked_drain = None
+
+                    else:
+                        miss_count = 0
+                        drain_seen_this_frame = True
+                        x, y, r = drain
+
+                        if candidate_x is None:
+                            candidate_x, candidate_y, candidate_r, candidate_count = x, y, r, 1
+                        else:
+                            if np.sqrt((x - candidate_x) ** 2 + (y - candidate_y) ** 2) <= DRAIN_LOCK_PX:
+                                candidate_x = int((candidate_x + x) / 2)
+                                candidate_y = int((candidate_y + y) / 2)
+                                candidate_r = int((candidate_r + r) / 2)
+                                candidate_count += 1
+                            else:
+                                candidate_x, candidate_y, candidate_r, candidate_count = x, y, r, 1
+
+                        status = f"locking drain {candidate_count}/{DRAIN_LOCK_FRAMES}"
+
+                        if candidate_count >= DRAIN_LOCK_FRAMES:
+                            was_locked = self.locked_drain_ready
+
+                            tracked_x, tracked_y, tracked_r = candidate_x, candidate_y, candidate_r
+                            self.locked_drain_ready = True
+                            self.locked_drain = (tracked_x, tracked_y, tracked_r)
+
+                            # Fire one-shot event only when this is a fresh lock
+                            if not was_locked:
+                                self.new_lock_event = True
+
+                            status = "drain locked"
+
+                self._update_drain_present(drain_seen_this_frame)
+
+                # If drain is gone now, let future re-locks count as fresh events
+                if not drain_seen_this_frame:
+                    self.locked_drain_ready = False
+
+                if candidate_x is not None:
+                    cv2.circle(display_img, (candidate_x, candidate_y), 7, (0, 0, 255), -1)
+                    cv2.circle(display_img, (candidate_x, candidate_y), max(12, candidate_r), (0, 0, 255), 2)
+
+                if tracked_x is not None and tracked_y is not None:
+                    cv2.circle(display_img, (tracked_x, tracked_y), 7, (0, 255, 0), -1)
+                    if tracked_r is not None:
+                        cv2.circle(display_img, (tracked_x, tracked_y), tracked_r, (0, 255, 0), 2)
+
+                cv2.putText(display_img, "Watcher", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(display_img, status, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+                self.display_frame = display_img
+                time.sleep(LOOP_DELAY)
+
+        except Exception as e:
+            print(f"[DrainWatcher Error] {e}")
+        finally:
+            self.is_running = False
+            self.locked_drain_ready = False
+            self.locked_drain = None
+            self.new_lock_event = False
+            self._update_drain_present(False)
+
+
+# =========================================================
 # MAIN CLASS FOR GUI
 # =========================================================
 class AutoDrainer:
