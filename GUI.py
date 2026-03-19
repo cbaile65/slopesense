@@ -9,6 +9,7 @@ import Defect_Masking
 import HardwareManager
 import AutoLeveler
 import Centering
+import Default_Workflow
 
 
 class FlowcheckGUI:
@@ -25,21 +26,13 @@ class FlowcheckGUI:
         # Start / stop and workflow state
         self.scan_active = False
         self.selected_sku = None
-        self.workflow_thread = None
-        self.workflow_id = 0
+
+        # Debug Mode State
+        self.debug_mode = False
 
         # Drain debug popup
         self.drain_win = None
         self.drain_label = None
-
-        # Strada assembly-line state
-        self.strada_cycle_thread = None
-        self.strada_cycle_running = False
-        self.current_tub_processed = False
-        self.current_tub_has_drain = False
-        self.center_abort_requested = False
-        self.last_drain_seen_state = False
-        self.autolevel_done_for_current_tub = False
 
         # ==========================================
         # 1. MAIN WINDOW GRID LAYOUT
@@ -117,7 +110,7 @@ class FlowcheckGUI:
             ("Select SKU", self.open_sku_menu, "#A9A9A9"),
             ("", None, "#A9A9A9"),
             ("Manual Motor\nControl", self.open_motor_menu, "#A9A9A9"),
-            ("Toggle Debug", None, "#A9A9A9"),
+            ("Toggle Debug", self.toggle_debug, "#A9A9A9"),  # <-- UPDATED: Wired up button
             ("CLOSE", self.on_closing, "orange")
         ]
 
@@ -143,6 +136,9 @@ class FlowcheckGUI:
         self.leveller = AutoLeveler.AutoLeveler(self.camera.device, self.hw)
         self.drainer = Centering.AutoDrainer(self.camera)
         self.drain_watcher = Centering.DrainWatcher(self.camera)
+
+        # Link the separate workflow script
+        self.strada_workflow = Default_Workflow.StradaWorkflow(self, self.leveller, self.drainer, self.drain_watcher)
 
         self.create_sku_menu()
         self.create_motor_menu()
@@ -334,10 +330,37 @@ class FlowcheckGUI:
             self.stop_all_workflows()
             print("Scan Stopped.")
         else:
+            if self.selected_sku != "Strada\n(Shower Base)":
+                print(f"No workflow assigned for SKU: {self.selected_sku}")
+                return
+
             self.scan_active = True
             self.main_buttons[0].config(text="STOP", bg="red")
             print("Scan Started.")
-            self.start_selected_sku_workflow()
+            self.strada_workflow.start_workflow()
+
+    def toggle_debug(self):
+        """Toggles the debug popup window on and off."""
+        self.debug_mode = not self.debug_mode
+        if self.debug_mode:
+            self.main_buttons[4].config(bg="green")
+            # If centering is currently happening, show the window immediately
+            if self.drainer.is_running:
+                self.open_drain_window()
+        else:
+            self.main_buttons[4].config(bg="#A9A9A9")
+            self.close_drain_window()
+
+    def stop_all_workflows(self):
+        self.scan_active = False
+        self.main_buttons[0].config(text="START", bg="green")
+
+        self.strada_workflow.stop_workflow()
+
+        self.btn_auto.config(bg="#A9A9A9")
+        self.btn_drain.config(bg="#A9A9A9")
+        self.close_drain_window()
+        self.reset_drain_status()
 
     # --- AUTO LEVEL ---
     def start_auto_level(self):
@@ -356,6 +379,10 @@ class FlowcheckGUI:
             )
 
     def open_drain_window(self):
+        # <-- UPDATED: The gatekeeper that blocks the window when not in Debug mode
+        if not self.debug_mode:
+            return
+
         if self.drain_win is not None:
             try:
                 if self.drain_win.winfo_exists():
@@ -411,6 +438,7 @@ class FlowcheckGUI:
         def _finish():
             self.btn_drain.config(bg="#A9A9A9")
             self.close_drain_window()
+
         self.root.after(0, _finish)
 
     def on_drain_status_changed(self, detected):
@@ -421,200 +449,14 @@ class FlowcheckGUI:
                 self.lbl_drain_detected.config(text="Drain Detected: Yes", fg="green")
             else:
                 self.lbl_drain_detected.config(text="Drain Detected: No", fg="black")
+
         self.root.after(0, _update)
 
     def reset_drain_status(self):
         def _update():
             self.lbl_drain_detected.config(text="Drain Detected: --", fg="black")
+
         self.root.after(0, _update)
-
-    # ==========================================
-    # STRADA ASSEMBLY-LINE WORKFLOW
-    # ==========================================
-    def start_selected_sku_workflow(self):
-        if self.selected_sku != "Strada\n(Shower Base)":
-            print(f"No workflow assigned for SKU: {self.selected_sku}")
-            return
-
-        self.workflow_id += 1
-        current_workflow_id = self.workflow_id
-
-        self.strada_cycle_running = False
-        self.current_tub_processed = False
-        self.current_tub_has_drain = False
-        self.center_abort_requested = False
-        self.last_drain_seen_state = False
-        self.autolevel_done_for_current_tub = False
-
-        self.on_drain_status_changed(False)
-
-        # Always run passive drain watcher while START is active
-        self.drain_watcher.start(
-            status_callback=self.on_drain_status_changed
-        )
-
-        def _workflow_manager():
-            print("[Strada Workflow] Running: autolevel first, then wait for drain.")
-            try:
-                while self.scan_active and self.workflow_id == current_workflow_id:
-                    drain_seen = bool(self.drain_watcher.drain_present)
-                    drain_locked = bool(self.drain_watcher.locked_drain_ready)
-
-                    # Drain lost -> tub is gone -> re-arm full cycle
-                    if not drain_seen and self.last_drain_seen_state:
-                        print("[Strada Workflow] Drain disappeared. Re-arming next cycle.")
-                        self.current_tub_has_drain = False
-                        self.current_tub_processed = False
-                        self.autolevel_done_for_current_tub = False
-
-                        if self.strada_cycle_running and self.drainer.is_running:
-                            print("[Strada Workflow] Drain lost during centering. Aborting cycle.")
-                            self.center_abort_requested = True
-                            self.drainer.stop()
-                            self.root.after(0, self.close_drain_window)
-
-                    # Run autolevel first for each new tub before drain search matters
-                    if (
-                        not self.autolevel_done_for_current_tub
-                        and not self.strada_cycle_running
-                    ):
-                        print("[Strada Workflow] Starting autolevel for next tub.")
-                        self.start_strada_cycle(current_workflow_id, mode="autolevel_then_wait_for_drain")
-
-                    # After autolevel, allow either:
-                    # 1) a fresh new lock event, OR
-                    # 2) an already-held locked drain
-                    elif (
-                        self.autolevel_done_for_current_tub
-                        and not self.current_tub_processed
-                        and not self.strada_cycle_running
-                    ):
-                        fresh_lock = self.drain_watcher.consume_new_lock_event()
-
-                        if fresh_lock or drain_locked:
-                            print("[Strada Workflow] Drain ready. Starting centering cycle.")
-                            self.current_tub_has_drain = True
-                            self.start_strada_cycle(current_workflow_id, mode="center_only")
-
-                    self.last_drain_seen_state = drain_seen
-                    time.sleep(0.05)
-
-            except Exception as e:
-                print(f"[Workflow Manager Error] {e}")
-                self.root.after(0, self.stop_all_workflows)
-
-        self.workflow_thread = threading.Thread(target=_workflow_manager, daemon=True)
-        self.workflow_thread.start()
-
-    def start_strada_cycle(self, workflow_id_at_start, mode):
-        if self.strada_cycle_running:
-            return
-
-        self.strada_cycle_running = True
-        self.center_abort_requested = False
-
-        def _cycle():
-            try:
-                if not self.scan_active or self.workflow_id != workflow_id_at_start:
-                    return
-
-                # ------------------------------------------
-                # MODE 1: autolevel first, then return to watcher
-                # ------------------------------------------
-                if mode == "autolevel_then_wait_for_drain":
-                    print("[Strada Cycle] Starting autolevel.")
-                    self.root.after(0, lambda: self.btn_auto.config(bg="green"))
-                    self.leveller.start()
-
-                    while (
-                        self.scan_active
-                        and self.workflow_id == workflow_id_at_start
-                        and self.leveller.is_running
-                    ):
-                        time.sleep(0.05)
-
-                    self.root.after(0, lambda: self.btn_auto.config(bg="#A9A9A9"))
-
-                    if not self.scan_active or self.workflow_id != workflow_id_at_start:
-                        return
-
-                    self.autolevel_done_for_current_tub = True
-                    print("[Strada Cycle] Autolevel complete. Waiting for drain.")
-
-                # ------------------------------------------
-                # MODE 2: drain already found, do center only
-                # ------------------------------------------
-                elif mode == "center_only":
-                    if not self.drain_watcher.drain_present:
-                        print("[Strada Cycle] Drain not present anymore. Canceling centering.")
-                        return
-
-                    print("[Strada Cycle] Starting autocenter.")
-                    self.root.after(0, lambda: self.btn_drain.config(bg="green"))
-                    self.root.after(0, self.open_drain_window)
-
-                    self.drainer.start(
-                        callback=self.auto_drain_done,
-                        stop_on_first_drain=False,
-                    )
-
-                    while (
-                        self.scan_active
-                        and self.workflow_id == workflow_id_at_start
-                        and self.drainer.is_running
-                    ):
-                        if not self.drain_watcher.drain_present:
-                            print("[Strada Cycle] Drain lost during autocenter. Stopping centering.")
-                            self.center_abort_requested = True
-                            self.drainer.stop()
-                            self.root.after(0, self.close_drain_window)
-                            break
-
-                        time.sleep(0.05)
-
-                    if not self.scan_active or self.workflow_id != workflow_id_at_start:
-                        return
-
-                    if self.center_abort_requested:
-                        print("[Strada Cycle] Cycle aborted. Waiting for drain loss / next tub.")
-                        return
-
-                    print("[Strada Cycle] Autocenter complete. Tub marked processed.")
-                    self.current_tub_processed = True
-
-            except Exception as e:
-                print(f"[Strada Cycle Error] {e}")
-                self.root.after(0, self.stop_all_workflows)
-
-            finally:
-                self.root.after(0, lambda: self.btn_auto.config(bg="#A9A9A9"))
-                self.root.after(0, lambda: self.btn_drain.config(bg="#A9A9A9"))
-                self.root.after(0, self.close_drain_window)
-                self.strada_cycle_running = False
-
-        self.strada_cycle_thread = threading.Thread(target=_cycle, daemon=True)
-        self.strada_cycle_thread.start()
-
-    def stop_all_workflows(self):
-        self.workflow_id += 1
-        self.scan_active = False
-        self.main_buttons[0].config(text="START", bg="green")
-
-        self.strada_cycle_running = False
-        self.current_tub_processed = False
-        self.current_tub_has_drain = False
-        self.center_abort_requested = False
-        self.last_drain_seen_state = False
-        self.autolevel_done_for_current_tub = False
-
-        self.leveller.stop()
-        self.drainer.stop()
-        self.drain_watcher.stop()
-
-        self.btn_auto.config(bg="#A9A9A9")
-        self.btn_drain.config(bg="#A9A9A9")
-        self.close_drain_window()
-        self.reset_drain_status()
 
     # --- MENU NAVIGATION ---
     def open_motor_menu(self):
@@ -622,12 +464,7 @@ class FlowcheckGUI:
         self.motor_frame.grid(row=1, column=0, columnspan=2, rowspan=2, sticky="nsew")
 
     def close_motor_menu(self):
-        self.leveller.stop()
-        self.drainer.stop()
-        self.drain_watcher.stop()
-        self.btn_auto.config(bg="#A9A9A9")
-        self.btn_drain.config(bg="#A9A9A9")
-        self.close_drain_window()
+        self.stop_all_workflows()
         self.motor_frame.grid_remove()
         self.toggle_main_view(True)
 
@@ -646,7 +483,7 @@ class FlowcheckGUI:
         self.camera.reset_depth()
 
     def update_video(self):
-        if self.camera.ref_depth is not None:
+        if hasattr(self.camera, "ref_depth") and self.camera.ref_depth is not None:
             self.lbl_cam_height.config(text=f"Camera Height: {self.camera.ref_depth:.3f} m")
         else:
             self.lbl_cam_height.config(text="Camera Height: --")
@@ -683,7 +520,8 @@ class FlowcheckGUI:
         self.is_running = False
         self.stop_all_workflows()
         self.leveller.shutdown()
-        self.camera.stop()
+        if hasattr(self.camera, "stop"):
+            self.camera.stop()
         self.hw.shutdown()
         self.root.destroy()
 

@@ -9,8 +9,9 @@ import threading
 # =========================================================
 PI_URL = "http://192.168.5.2:5000"
 
-MOTOR_A_UP_PIN = 24
-MOTOR_A_DOWN_PIN = 23
+# Swapped these pins so UP physically moves UP and DOWN physically moves DOWN
+MOTOR_A_UP_PIN = 23
+MOTOR_A_DOWN_PIN = 24
 MOTOR_B_FORWARD_PIN = 17
 MOTOR_B_BACKWARD_PIN = 27
 
@@ -18,7 +19,7 @@ MOTOR_B_BACKWARD_PIN = 27
 # SETTINGS
 # =========================================================
 TARGET_DISTANCE_M = 1.25
-DISTANCE_TOL_M = 0.05
+DISTANCE_TOL_M = 0.10
 
 TARGET_Y_FRAC = 0.50
 Y_TOL_PX = 15
@@ -594,12 +595,14 @@ class AutoDrainer:
                             stage = 4
                             status = "height locked"
                         else:
+                            # If target distance is greater than current (error > 0), the camera needs to back away (move UP).
                             if height_error > 0:
-                                hold_height_down()
-                                status = "moving down"
-                            else:
                                 hold_height_up()
                                 status = "moving up"
+                            # If target distance is less than current (error < 0), the camera is too far away (move DOWN).
+                            else:
+                                hold_height_down()
+                                status = "moving down"
 
                 # --- STAGE 4 ---
                 else:
