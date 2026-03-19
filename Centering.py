@@ -17,8 +17,8 @@ MOTOR_B_BACKWARD_PIN = 27
 # =========================================================
 # SETTINGS
 # =========================================================
-TARGET_DISTANCE_M = 1.50
-DISTANCE_TOL_M = 0.03
+TARGET_DISTANCE_M = 1.25
+DISTANCE_TOL_M = 0.05
 
 TARGET_Y_FRAC = 0.50
 Y_TOL_PX = 15
@@ -44,13 +44,12 @@ DIST_ROI_HALF = 22
 LOOP_DELAY = 0.03
 
 # =========================================================
-# HTTP MOTOR CONTROL (ANTI-FREEZE APPLIED HERE)
+# HTTP MOTOR CONTROL
 # =========================================================
 pin_states = {}
 
 
 def set_pin(pin, state):
-    # Prevent network spam! Only send an HTTP request if the state actually changes.
     if pin_states.get(pin) == state:
         return True
 
@@ -58,7 +57,7 @@ def set_pin(pin, state):
         requests.get(f"{PI_URL}/pin/{pin}/{state.lower()}", timeout=0.5)
         pin_states[pin] = state
         return True
-    except:
+    except Exception:
         return False
 
 
@@ -77,22 +76,28 @@ def hold_direction(on_pin, off_pin):
     set_pin(off_pin, "off")
 
 
-def hold_height_up(): hold_direction(MOTOR_A_UP_PIN, MOTOR_A_DOWN_PIN)
+def hold_height_up():
+    hold_direction(MOTOR_A_UP_PIN, MOTOR_A_DOWN_PIN)
 
 
-def hold_height_down(): hold_direction(MOTOR_A_DOWN_PIN, MOTOR_A_UP_PIN)
+def hold_height_down():
+    hold_direction(MOTOR_A_DOWN_PIN, MOTOR_A_UP_PIN)
 
 
-def stop_height(): stop_pair(MOTOR_A_UP_PIN, MOTOR_A_DOWN_PIN)
+def stop_height():
+    stop_pair(MOTOR_A_UP_PIN, MOTOR_A_DOWN_PIN)
 
 
-def hold_motor_b_forward(): hold_direction(MOTOR_B_FORWARD_PIN, MOTOR_B_BACKWARD_PIN)
+def hold_motor_b_forward():
+    hold_direction(MOTOR_B_FORWARD_PIN, MOTOR_B_BACKWARD_PIN)
 
 
-def hold_motor_b_backward(): hold_direction(MOTOR_B_BACKWARD_PIN, MOTOR_B_FORWARD_PIN)
+def hold_motor_b_backward():
+    hold_direction(MOTOR_B_BACKWARD_PIN, MOTOR_B_FORWARD_PIN)
 
 
-def stop_motor_b(): stop_pair(MOTOR_B_FORWARD_PIN, MOTOR_B_BACKWARD_PIN)
+def stop_motor_b():
+    stop_pair(MOTOR_B_FORWARD_PIN, MOTOR_B_BACKWARD_PIN)
 
 
 # =========================================================
@@ -133,14 +138,16 @@ def circle_masks(shape, x, y, r):
 
 def score_circle(gray, x, y, r):
     h, w = gray.shape
-    if x - 3 * r < 0 or x + 3 * r >= w or y - 3 * r < 0 or y + 3 * r >= h: return -999999
+    if x - 3 * r < 0 or x + 3 * r >= w or y - 3 * r < 0 or y + 3 * r >= h:
+        return -999999
 
     center_mask, ring_mask, outer_mask = circle_masks(gray.shape, x, y, r)
     center_vals = gray[center_mask]
     ring_vals = gray[ring_mask]
     outer_vals = gray[outer_mask]
 
-    if center_vals.size == 0 or ring_vals.size == 0 or outer_vals.size == 0: return -999999
+    if center_vals.size == 0 or ring_vals.size == 0 or outer_vals.size == 0:
+        return -999999
 
     center_mean = float(np.mean(center_vals))
     ring_mean = float(np.mean(ring_vals))
@@ -153,13 +160,22 @@ def score_circle(gray, x, y, r):
 
     size_bonus = 25.0 if 12 <= r <= 28 else 0.0
     location_bonus = 0.0
-    if y < int(H * 0.82): location_bonus += 20.0
-    if x > int(W * 0.35): location_bonus += 10.0
+    if y < int(H * 0.82):
+        location_bonus += 20.0
+    if x > int(W * 0.35):
+        location_bonus += 10.0
 
-    if outer_mean < 120 or center_mean > 110: return -999999
+    if outer_mean < 120 or center_mean > 110:
+        return -999999
 
-    return (center_dark_score * 2.2 + ring_dark_score * 0.8 + outer_bright_score * 1.0 +
-            contrast_score * 2.0 + size_bonus + location_bonus)
+    return (
+        center_dark_score * 2.2
+        + ring_dark_score * 0.8
+        + outer_bright_score * 1.0
+        + contrast_score * 2.0
+        + size_bonus
+        + location_bonus
+    )
 
 
 def auto_find_drain(img):
@@ -168,15 +184,26 @@ def auto_find_drain(img):
     y1, y2, x1, x2 = 0, int(H * 0.82), 0, W
     roi = gray[y1:y2, x1:x2]
 
-    circles = cv2.HoughCircles(roi, cv2.HOUGH_GRADIENT, dp=1.2, minDist=50, param1=100, param2=16,
-                               minRadius=GLOBAL_MIN_RADIUS, maxRadius=GLOBAL_MAX_RADIUS)
-    if circles is None: return None
+    circles = cv2.HoughCircles(
+        roi,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=50,
+        param1=100,
+        param2=16,
+        minRadius=GLOBAL_MIN_RADIUS,
+        maxRadius=GLOBAL_MAX_RADIUS
+    )
+    if circles is None:
+        return None
 
     best, best_score = None, -999999
     for cx, cy, r in np.round(circles[0]).astype(int):
         x, y = cx + x1, cy + y1
         s = score_circle(gray, x, y, r)
-        if s > best_score: best_score, best = s, (x, y, r)
+        if s > best_score:
+            best_score, best = s, (x, y, r)
+
     return best
 
 
@@ -188,17 +215,29 @@ def find_drain_local(img, last_x, last_y):
     y1, y2 = max(0, last_y - box), min(H, last_y + box)
     roi = gray[y1:y2, x1:x2]
 
-    if roi.shape[0] < 20 or roi.shape[1] < 20: return None
+    if roi.shape[0] < 20 or roi.shape[1] < 20:
+        return None
 
-    circles = cv2.HoughCircles(roi, cv2.HOUGH_GRADIENT, dp=1.2, minDist=30, param1=100, param2=14,
-                               minRadius=LOCAL_MIN_RADIUS, maxRadius=LOCAL_MAX_RADIUS)
-    if circles is None: return None
+    circles = cv2.HoughCircles(
+        roi,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=30,
+        param1=100,
+        param2=14,
+        minRadius=LOCAL_MIN_RADIUS,
+        maxRadius=LOCAL_MAX_RADIUS
+    )
+    if circles is None:
+        return None
 
     best, best_score = None, -999999
     for cx, cy, r in np.round(circles[0]).astype(int):
         x, y = cx + x1, cy + y1
         s = score_circle(gray, x, y, r) - (np.sqrt((x - last_x) ** 2 + (y - last_y) ** 2) * 2.0)
-        if s > best_score: best_score, best = s, (x, y, r)
+        if s > best_score:
+            best_score, best = s, (x, y, r)
+
     return best
 
 
@@ -211,25 +250,45 @@ class AutoDrainer:
         self.is_running = False
         self.thread = None
         self.callback = None
+        self.status_callback = None
+        self.stop_on_first_drain = False
         self.raw_color = None
         self.raw_depth = None
         self.display_frame = None
+        self.drain_present = False
 
-    def start(self, callback=None):
+    def start(self, callback=None, status_callback=None, stop_on_first_drain=False):
         self.callback = callback
+        self.status_callback = status_callback
+        self.stop_on_first_drain = stop_on_first_drain
+        self._update_drain_present(False)
+
         if not self.is_running:
             self.is_running = True
-            # Reset pin cache on fresh start
             global pin_states
             pin_states = {}
             self.thread = threading.Thread(target=self._run, daemon=True)
             self.thread.start()
 
     def stop(self):
+        was_running = self.is_running
         self.is_running = False
         stop_all()
-        if self.callback:
+        self._update_drain_present(False)
+
+        if was_running and self.callback:
             self.callback("stopped")
+
+    def _update_drain_present(self, drain_present):
+        drain_present = bool(drain_present)
+        changed = drain_present != self.drain_present
+        self.drain_present = drain_present
+
+        if self.status_callback and changed:
+            try:
+                self.status_callback(drain_present)
+            except Exception:
+                pass
 
     def _run(self):
         print("\n--- Auto-Drain Centering Started ---")
@@ -253,43 +312,71 @@ class AutoDrainer:
                 target_y = int(h * TARGET_Y_FRAC)
                 basin_distance_m, dist_roi = get_basin_distance(depth_img)
                 status = ""
+                drain_seen_this_frame = False
 
                 # --- STAGE 0 ---
                 if stage == 0:
                     stop_all()
                     status = "waiting before search"
-                    if time.time() - startup_time >= STARTUP_WAIT_S: stage = 1
+                    if time.time() - startup_time >= STARTUP_WAIT_S:
+                        stage = 1
 
                 # --- STAGE 1 ---
                 elif stage == 1:
                     stop_all()
                     drain = auto_find_drain(color_img)
+
                     if drain is None:
                         candidate_x, candidate_y, candidate_r, candidate_count = None, None, None, 0
                         status = "searching for drain"
                     else:
+                        drain_seen_this_frame = True
                         x, y, r = drain
+
                         if candidate_x is None:
                             candidate_x, candidate_y, candidate_r, candidate_count = x, y, r, 1
                         else:
                             if np.sqrt((x - candidate_x) ** 2 + (y - candidate_y) ** 2) <= DRAIN_LOCK_PX:
-                                candidate_x, candidate_y, candidate_r = int((candidate_x + x) / 2), int(
-                                    (candidate_y + y) / 2), int((candidate_r + r) / 2)
+                                candidate_x = int((candidate_x + x) / 2)
+                                candidate_y = int((candidate_y + y) / 2)
+                                candidate_r = int((candidate_r + r) / 2)
                                 candidate_count += 1
                             else:
                                 candidate_x, candidate_y, candidate_r, candidate_count = x, y, r, 1
+
                         status = f"locking drain {candidate_count}/{DRAIN_LOCK_FRAMES}"
+
                         if candidate_count >= DRAIN_LOCK_FRAMES:
                             tracked_x, tracked_y, tracked_r = candidate_x, candidate_y, candidate_r
-                            y_locked_frames, stage, status = 0, 2, "drain locked"
+                            y_locked_frames = 0
+                            stage = 2
+                            status = "drain locked"
+
+                            if self.stop_on_first_drain:
+                                self._update_drain_present(True)
+                                cv2.putText(
+                                    display_img,
+                                    status,
+                                    (20, 60),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.7,
+                                    (255, 255, 255),
+                                    2
+                                )
+                                self.display_frame = display_img
+                                print("\n--- Drain Found: stopping centering early by request ---")
+                                break
 
                 # --- STAGE 2 ---
                 elif stage == 2:
                     stop_height()
-                    drain = find_drain_local(color_img, tracked_x, tracked_y) if tracked_x else None
+                    drain = find_drain_local(color_img, tracked_x, tracked_y) if tracked_x is not None else None
+
                     if drain is not None:
+                        drain_seen_this_frame = True
                         tracked_x, tracked_y, tracked_r = drain
                         y_error = tracked_y - target_y
+
                         if abs(y_error) <= Y_TOL_PX:
                             y_locked_frames += 1
                             stop_motor_b()
@@ -302,9 +389,11 @@ class AutoDrainer:
                             else:
                                 hold_motor_b_backward()
                                 status = "aligning backward"
+
                         if y_locked_frames >= Y_LOCK_FRAMES:
                             stop_motor_b()
-                            stage, status = 3, "drain line aligned"
+                            stage = 3
+                            status = "drain line aligned"
                     else:
                         stop_motor_b()
                         status = "local drain track lost"
@@ -312,17 +401,22 @@ class AutoDrainer:
                 # --- STAGE 3 ---
                 elif stage == 3:
                     stop_motor_b()
-                    drain = find_drain_local(color_img, tracked_x, tracked_y) if tracked_x else None
-                    if drain is not None: tracked_x, tracked_y, tracked_r = drain
+                    drain = find_drain_local(color_img, tracked_x, tracked_y) if tracked_x is not None else None
+
+                    if drain is not None:
+                        drain_seen_this_frame = True
+                        tracked_x, tracked_y, tracked_r = drain
 
                     if basin_distance_m is None:
                         stop_height()
                         status = "no basin depth"
                     else:
                         height_error = TARGET_DISTANCE_M - basin_distance_m
+
                         if abs(height_error) <= DISTANCE_TOL_M:
                             stop_height()
-                            stage, status = 4, "height locked"
+                            stage = 4
+                            status = "height locked"
                         else:
                             if height_error > 0:
                                 hold_height_down()
@@ -334,14 +428,28 @@ class AutoDrainer:
                 # --- STAGE 4 ---
                 else:
                     stop_all()
-                    drain = find_drain_local(color_img, tracked_x, tracked_y) if tracked_x else None
-                    if drain is not None: tracked_x, tracked_y, tracked_r = drain
+                    drain = find_drain_local(color_img, tracked_x, tracked_y) if tracked_x is not None else None
+
+                    if drain is not None:
+                        drain_seen_this_frame = True
+                        tracked_x, tracked_y, tracked_r = drain
+
                     status = "done"
                     print("\n--- Auto-Drain Centering Finished! ---")
 
-                    cv2.putText(display_img, status, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    cv2.putText(
+                        display_img,
+                        status,
+                        (20, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (255, 255, 255),
+                        2
+                    )
                     self.display_frame = display_img
                     break
+
+                self._update_drain_present(drain_seen_this_frame)
 
                 # --- DRAW ---
                 cv2.line(display_img, (0, target_y), (w, target_y), (0, 255, 255), 2)
@@ -353,7 +461,8 @@ class AutoDrainer:
 
                 if tracked_x is not None and tracked_y is not None:
                     cv2.circle(display_img, (tracked_x, tracked_y), 7, (0, 255, 0), -1)
-                    if tracked_r is not None: cv2.circle(display_img, (tracked_x, tracked_y), tracked_r, (0, 255, 0), 2)
+                    if tracked_r is not None:
+                        cv2.circle(display_img, (tracked_x, tracked_y), tracked_r, (0, 255, 0), 2)
 
                 dx1, dy1, dx2, dy2 = dist_roi
                 cv2.rectangle(display_img, (dx1, dy1), (dx2, dy2), (255, 255, 0), 2)
@@ -362,17 +471,37 @@ class AutoDrainer:
                 cv2.putText(display_img, status, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
                 if tracked_x is not None and tracked_y is not None:
-                    cv2.putText(display_img, f"Tracked x,y: {tracked_x}, {tracked_y}", (20, 90),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    cv2.putText(
+                        display_img,
+                        f"Tracked x,y: {tracked_x}, {tracked_y}",
+                        (20, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2
+                    )
 
                 if basin_distance_m is not None:
-                    cv2.putText(display_img, f"Basin distance: {basin_distance_m:.3f} m", (20, 120),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                    cv2.putText(display_img, f"Height error: {TARGET_DISTANCE_M - basin_distance_m:.3f} m", (20, 150),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    cv2.putText(
+                        display_img,
+                        f"Basin distance: {basin_distance_m:.3f} m",
+                        (20, 120),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2
+                    )
+                    cv2.putText(
+                        display_img,
+                        f"Height error: {TARGET_DISTANCE_M - basin_distance_m:.3f} m",
+                        (20, 150),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2
+                    )
 
                 self.display_frame = display_img
-
                 time.sleep(LOOP_DELAY)
 
         except Exception as e:

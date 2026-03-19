@@ -24,6 +24,12 @@ class FlowcheckGUI:
 
         # Used for the Start/Stop toggle button
         self.scan_active = False
+        self.selected_sku = None
+        self.workflow_thread = None
+        self.workflow_id = 0
+
+        self.drain_win = None
+        self.drain_label = None
 
         # ==========================================
         # 1. MAIN WINDOW GRID LAYOUT
@@ -51,20 +57,26 @@ class FlowcheckGUI:
 
         self.title_label.pack(side="left")
 
-        self.version_label = tk.Label(self.header_frame, text="V0.1", font=("Arial", 24, "bold"), bg="white",
-                                      fg="black")
+        self.version_label = tk.Label(
+            self.header_frame,
+            text="V0.1",
+            font=("Arial", 24, "bold"),
+            bg="white",
+            fg="black"
+        )
         self.version_label.pack(side="left", padx=(15, 0), anchor="s", pady=(0, 15))
 
         self.info_frame = tk.Frame(self.root, bg="white")
 
         self.info_labels = [
             tk.Label(self.info_frame, text="Camera Height: --", bg="white", fg="black"),
-            tk.Label(self.info_frame, text="Tub Detected: --", bg="white", fg="black"),
+            tk.Label(self.info_frame, text="Tub Detected: No", bg="white", fg="black"),
             tk.Label(self.info_frame, text="Defects Detected: --", bg="white", fg="black"),
             tk.Label(self.info_frame, text="Units Scanned: --", bg="white", fg="black")
         ]
 
         self.lbl_cam_height = self.info_labels[0]
+        self.lbl_tub_detected = self.info_labels[1]
 
         for lbl in self.info_labels:
             lbl.pack(anchor="w", pady=6)
@@ -100,8 +112,15 @@ class FlowcheckGUI:
         ]
 
         for i, (text, cmd, bg_color) in enumerate(button_config):
-            btn = tk.Button(self.button_frame, text=text, font=("Arial", 16, "bold"), bg=bg_color, fg="black", height=3,
-                            command=cmd)
+            btn = tk.Button(
+                self.button_frame,
+                text=text,
+                font=("Arial", 16, "bold"),
+                bg=bg_color,
+                fg="black",
+                height=3,
+                command=cmd
+            )
             btn.grid(row=0, column=i, sticky="nsew", padx=(0, 15) if i < 5 else 0)
             self.main_buttons.append(btn)
 
@@ -118,6 +137,7 @@ class FlowcheckGUI:
         self.create_motor_menu()
 
         self.apply_sku_layout("Strada\n(Shower Base)")
+        self.selected_sku = "Strada\n(Shower Base)"
         self.root.update_idletasks()
 
         self.latest_frame = None
@@ -135,11 +155,12 @@ class FlowcheckGUI:
                     self.latest_frame = frame
 
                     self.drainer.raw_color = frame
-                    if hasattr(self.camera, 'depth_stack'):
+                    if hasattr(self.camera, "depth_stack"):
                         self.drainer.raw_depth = self.camera.depth_stack[0]
 
             except Exception as e:
                 print(f"Camera thread error: {e}")
+
             time.sleep(0.01)
 
     # ==========================================
@@ -160,8 +181,10 @@ class FlowcheckGUI:
     # ==========================================
     def create_sku_menu(self):
         self.sku_frame = tk.Frame(self.root, bg="white")
-        for col in range(3): self.sku_frame.columnconfigure(col, weight=1, uniform="sku_grid_cols")
-        for row in range(2): self.sku_frame.rowconfigure(row, weight=1, uniform="sku_grid_rows")
+        for col in range(3):
+            self.sku_frame.columnconfigure(col, weight=1, uniform="sku_grid_cols")
+        for row in range(2):
+            self.sku_frame.rowconfigure(row, weight=1, uniform="sku_grid_rows")
 
         sku_btns = [
             "Strada\n(Shower Base)", "(Skirted Tub)", "(Tub-Shower)",
@@ -172,10 +195,18 @@ class FlowcheckGUI:
             cmd = self.close_sku_menu if name == "Back" else (lambda n=name: self.select_sku(n) if n else None)
             bg_color = "#A9A9A9" if name == "Back" else "#E0E0E0"
 
-            btn = tk.Button(self.sku_frame, text=name, font=("Arial", 24, "bold"), bg=bg_color, fg="black", command=cmd)
+            btn = tk.Button(
+                self.sku_frame,
+                text=name,
+                font=("Arial", 24, "bold"),
+                bg=bg_color,
+                fg="black",
+                command=cmd
+            )
             btn.grid(row=i // 3, column=i % 3, sticky="nsew", padx=15, pady=15)
 
     def select_sku(self, sku_name):
+        self.selected_sku = sku_name
         self.apply_sku_layout(sku_name)
         self.close_sku_menu()
 
@@ -211,8 +242,10 @@ class FlowcheckGUI:
     # ==========================================
     def create_motor_menu(self):
         self.motor_frame = tk.Frame(self.root, bg="white")
-        for i in range(3): self.motor_frame.columnconfigure(i, weight=3 if i == 1 else 1)
-        for i in range(3): self.motor_frame.rowconfigure(i, weight=3 if i == 1 else 1)
+        for i in range(3):
+            self.motor_frame.columnconfigure(i, weight=3 if i == 1 else 1)
+        for i in range(3):
+            self.motor_frame.rowconfigure(i, weight=3 if i == 1 else 1)
 
         rot_font = ("Arial", 42, "bold")
 
@@ -226,9 +259,6 @@ class FlowcheckGUI:
         btn_ccw.bind("<ButtonPress-1>", lambda e: self.hw.rotate_ccw(True))
         btn_ccw.bind("<ButtonRelease-1>", lambda e: self.hw.rotate_ccw(False))
 
-        # --- CENTER DRAIN BUTTON ALIGNMENT FIX ---
-        # We put it in a transparent container that mathematically matches the column weights of the D-Pad below it.
-        # This aligns it perfectly vertically with the rotation buttons, and guarantees identical dimensions to the AUTO LEVEL button!
         drain_container = tk.Frame(self.motor_frame, bg="white")
         drain_container.grid(row=0, column=1, sticky="nsew", padx=5, pady=25)
         drain_container.columnconfigure(0, weight=5)
@@ -236,17 +266,22 @@ class FlowcheckGUI:
         drain_container.columnconfigure(2, weight=5)
         drain_container.rowconfigure(0, weight=1)
 
-        self.btn_drain = tk.Button(drain_container, text="CENTER\nDRAIN", font=("Arial", 16, "bold"), bg="#A9A9A9",
-                                   command=self.toggle_auto_drain)
+        self.btn_drain = tk.Button(
+            drain_container,
+            text="CENTER\nDRAIN",
+            font=("Arial", 16, "bold"),
+            bg="#A9A9A9",
+            command=self.toggle_auto_drain
+        )
         self.btn_drain.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
 
-        # --- D-PAD ---
         dpad = tk.Frame(self.motor_frame, bg="white")
         dpad.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
-        dpad.columnconfigure(0, weight=5);
-        dpad.columnconfigure(1, weight=4);
+        dpad.columnconfigure(0, weight=5)
+        dpad.columnconfigure(1, weight=4)
         dpad.columnconfigure(2, weight=5)
-        for i in range(3): dpad.rowconfigure(i, weight=1, uniform="dpad_rows")
+        for i in range(3):
+            dpad.rowconfigure(i, weight=1, uniform="dpad_rows")
 
         dpad_config = [
             ("UP", 0, 1, self.hw.move_up),
@@ -261,24 +296,34 @@ class FlowcheckGUI:
             btn.bind("<ButtonPress-1>", lambda e, f=func: f(True))
             btn.bind("<ButtonRelease-1>", lambda e, f=func: f(False))
 
-        # Auto Level Button
-        self.btn_auto = tk.Button(dpad, text="AUTO\nLEVEL", font=("Arial", 12, "bold"), bg="#A9A9A9",
-                                  command=self.start_auto_level)
+        self.btn_auto = tk.Button(
+            dpad,
+            text="AUTO\nLEVEL",
+            font=("Arial", 12, "bold"),
+            bg="#A9A9A9",
+            command=self.start_auto_level
+        )
         self.btn_auto.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
 
-        tk.Button(self.motor_frame, text="Back", font=("Arial", 24, "bold"), bg="#A9A9A9",
-                  command=self.close_motor_menu, padx=20).grid(row=2, column=2, sticky="se", padx=40, pady=40)
+        tk.Button(
+            self.motor_frame,
+            text="Back",
+            font=("Arial", 24, "bold"),
+            bg="#A9A9A9",
+            command=self.close_motor_menu,
+            padx=20
+        ).grid(row=2, column=2, sticky="se", padx=40, pady=40)
 
     # --- MAIN MENU LOGIC ---
     def toggle_start_stop(self):
         if self.scan_active:
-            self.scan_active = False
-            self.main_buttons[0].config(text="START", bg="green")
+            self.stop_all_workflows()
             print("Scan Stopped.")
         else:
             self.scan_active = True
             self.main_buttons[0].config(text="STOP", bg="red")
             print("Scan Started.")
+            self.start_selected_sku_workflow()
 
     # --- AUTO LEVEL ---
     def start_auto_level(self):
@@ -290,29 +335,53 @@ class FlowcheckGUI:
             self.drainer.stop()
         else:
             self.btn_drain.config(bg="green")
-            self.drainer.start(callback=self.auto_drain_done)
             self.open_drain_window()
+            self.drainer.start(
+                callback=self.auto_drain_done,
+                status_callback=self.on_drain_status_changed,
+                stop_on_first_drain=False,
+            )
 
     def open_drain_window(self):
+        if self.drain_win is not None:
+            try:
+                if self.drain_win.winfo_exists():
+                    self.drain_win.deiconify()
+                    self.drain_win.lift()
+                    return
+            except Exception:
+                pass
+
         self.drain_win = tk.Toplevel(self.root)
         self.drain_win.title("Auto Drain Tracking")
         self.drain_win.geometry("640x480")
         self.drain_win.configure(bg="black")
+        self.drain_win.protocol("WM_DELETE_WINDOW", self.close_drain_window)
 
         self.drain_label = tk.Label(self.drain_win, bg="black")
         self.drain_label.pack(expand=True, fill="both")
 
         self.update_drain_window()
 
+    def close_drain_window(self):
+        if self.drain_win is not None:
+            try:
+                if self.drain_win.winfo_exists():
+                    self.drain_win.destroy()
+            except Exception:
+                pass
+
+        self.drain_win = None
+        self.drain_label = None
+
     def update_drain_window(self):
         if not self.drainer.is_running:
-            if hasattr(self, 'drain_win') and self.drain_win.winfo_exists():
-                self.drain_win.destroy()
+            self.close_drain_window()
             return
 
-        frame = getattr(self.drainer, 'display_frame', None)
+        frame = getattr(self.drainer, "display_frame", None)
 
-        if frame is not None:
+        if frame is not None and self.drain_label is not None:
             try:
                 cv2_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 pil_img = Image.fromarray(cv2_img)
@@ -326,7 +395,70 @@ class FlowcheckGUI:
         self.root.after(30, self.update_drain_window)
 
     def auto_drain_done(self, status):
-        self.root.after(0, lambda: self.btn_drain.config(bg="#A9A9A9"))
+        def _finish():
+            self.btn_drain.config(bg="#A9A9A9")
+            self.close_drain_window()
+        self.root.after(0, _finish)
+
+    def on_drain_status_changed(self, detected):
+        def _update():
+            if detected:
+                self.lbl_tub_detected.config(text="Tub Detected: Yes", fg="green")
+            else:
+                self.lbl_tub_detected.config(text="Tub Detected: No", fg="black")
+        self.root.after(0, _update)
+
+    def reset_drain_status(self):
+        self.on_drain_status_changed(False)
+
+    def start_selected_sku_workflow(self):
+        if self.selected_sku != "Strada\n(Shower Base)":
+            print(f"No workflow assigned for SKU: {self.selected_sku}")
+            return
+
+        self.workflow_id += 1
+        current_workflow_id = self.workflow_id
+        self.reset_drain_status()
+
+        def _workflow():
+            try:
+                # 1) Run autolevel first
+                self.leveller.start()
+
+                while self.scan_active and self.workflow_id == current_workflow_id and self.leveller.is_running:
+                    time.sleep(0.05)
+
+                if not self.scan_active or self.workflow_id != current_workflow_id:
+                    return
+
+                # 2) Then start drain centering and open popup window
+                self.root.after(0, lambda: self.btn_drain.config(bg="green"))
+                self.root.after(0, self.open_drain_window)
+
+                self.drainer.start(
+                    callback=self.auto_drain_done,
+                    status_callback=self.on_drain_status_changed,
+                    stop_on_first_drain=False,   # keep running until centering is actually done
+                )
+
+            except Exception as e:
+                print(f"Workflow error: {e}")
+                self.root.after(0, self.stop_all_workflows)
+
+        self.workflow_thread = threading.Thread(target=_workflow, daemon=True)
+        self.workflow_thread.start()
+
+    def stop_all_workflows(self):
+        self.workflow_id += 1
+        self.scan_active = False
+        self.main_buttons[0].config(text="START", bg="green")
+
+        self.leveller.stop()
+        self.drainer.stop()
+
+        self.btn_drain.config(bg="#A9A9A9")
+        self.close_drain_window()
+        self.reset_drain_status()
 
     # --- MENU NAVIGATION ---
     def open_motor_menu(self):
@@ -336,6 +468,8 @@ class FlowcheckGUI:
     def close_motor_menu(self):
         self.leveller.stop()
         self.drainer.stop()
+        self.btn_drain.config(bg="#A9A9A9")
+        self.close_drain_window()
         self.motor_frame.grid_remove()
         self.toggle_main_view(True)
 
@@ -389,7 +523,7 @@ class FlowcheckGUI:
 
     def on_closing(self):
         self.is_running = False
-        self.drainer.stop()
+        self.stop_all_workflows()
         self.leveller.shutdown()
         self.camera.stop()
         self.hw.shutdown()
