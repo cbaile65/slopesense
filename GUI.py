@@ -10,6 +10,7 @@ import HardwareManager
 import AutoLeveler
 import Centering
 import Default_Workflow
+import Shelf_Workflow
 
 
 class FlowcheckGUI:
@@ -26,7 +27,7 @@ class FlowcheckGUI:
         # Start / stop and workflow state
         self.scan_active = False
         self.selected_sku = None
-        self.tubs_scanned = 0  # <-- NEW: Counter for tubs processed
+        self.tubs_scanned = 0
 
         # Debug Mode State
         self.debug_mode = False
@@ -34,6 +35,10 @@ class FlowcheckGUI:
         # Drain debug popup
         self.drain_win = None
         self.drain_label = None
+
+        # Flag and frame for custom workflow debug windows (like the shelf arm retraction)
+        self.force_drain_window = False
+        self.custom_debug_frame = None
 
         # ==========================================
         # 1. MAIN WINDOW GRID LAYOUT
@@ -43,7 +48,7 @@ class FlowcheckGUI:
         self.root.rowconfigure(2, weight=0)
 
         # ==========================================
-        # 2. TOP ROW: Header Frame & Info Frame
+        # 2. TOP ROW: Header Frame
         # ==========================================
         self.header_frame = tk.Frame(self.root, bg="white")
         self.header_frame.grid(row=0, column=0, sticky="nw", padx=40, pady=(20, 10))
@@ -70,10 +75,26 @@ class FlowcheckGUI:
         )
         self.version_label.pack(side="left", padx=(15, 0), anchor="s", pady=(0, 15))
 
-        self.info_frame = tk.Frame(self.root, bg="white")
+        # ==========================================
+        # 3. MIDDLE ROW: Video Feed & Right Column
+        # ==========================================
+        self.video_container = tk.Frame(self.root, bg="white")
+        self.video_label = tk.Label(self.video_container, bg="black")
+        self.video_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.video_label.bind("<Button-1>", self.on_video_click)
+        self.root.bind("<r>", self.on_r_keypress)
+
+        # Master Right Column Frame
+        self.right_col_frame = tk.Frame(self.root, bg="white")
+        self.right_col_frame.grid(row=1, column=1, sticky="nsew", padx=(10, 40), pady=10)
+
+        # Info Frame (Lives inside Right Column)
+        self.info_frame = tk.Frame(self.right_col_frame, bg="white")
+        self.info_frame.pack(side="top", anchor="w", fill="x")
 
         self.info_labels = [
-            tk.Label(self.info_frame, text="SKU: None", bg="white", fg="#0044cc"),  # <-- NEW: SKU Label
+            tk.Label(self.info_frame, text="SKU: None", bg="white", fg="#0044cc"),
             tk.Label(self.info_frame, text="Camera Height: --", bg="white", fg="black"),
             tk.Label(self.info_frame, text="Drain Detected: --", bg="white", fg="black"),
             tk.Label(self.info_frame, text="Defects Detected: --", bg="white", fg="black"),
@@ -88,15 +109,20 @@ class FlowcheckGUI:
         for lbl in self.info_labels:
             lbl.pack(anchor="w", pady=6)
 
-        # ==========================================
-        # 3. MIDDLE ROW: Video Feed
-        # ==========================================
-        self.video_container = tk.Frame(self.root, bg="white")
-        self.video_label = tk.Label(self.video_container, bg="black")
-        self.video_label.place(relx=0.5, rely=0.5, anchor="center")
+        # Right Camera Container (Lives below Info Frame)
+        self.right_cam_container = tk.Frame(self.right_col_frame, bg="white")
+        self.black_box_1 = tk.Frame(self.right_cam_container, bg="black")
+        self.black_box_2 = tk.Frame(self.right_cam_container, bg="black")
 
-        self.video_label.bind("<Button-1>", self.on_video_click)
-        self.root.bind("<r>", self.on_r_keypress)
+        # Labels for the side camera captures
+        self.lbl_box_1 = tk.Label(self.black_box_1, bg="black")
+        self.lbl_box_1.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.lbl_box_2 = tk.Label(self.black_box_2, bg="black")
+        self.lbl_box_2.place(relx=0.5, rely=0.5, anchor="center")
+
+        # State variable for freezing the main feed
+        self.frozen_main_img = None
 
         # ==========================================
         # 4. BOTTOM ROW: Main Screen Buttons
@@ -136,13 +162,11 @@ class FlowcheckGUI:
         # ==========================================
         self.hw = HardwareManager.HardwareManager()
 
-        # Safely try to initialize the camera
         try:
             self.camera = Defect_Masking.DefectDetector()
         except Exception as e:
             print(f"Camera not detected on startup: {e}")
 
-            # Dummy class to prevent other modules from crashing
             class DummyCamera:
                 def __init__(self):
                     self.device = None
@@ -158,7 +182,6 @@ class FlowcheckGUI:
 
             self.camera = DummyCamera()
 
-        # Create the fallback "No Camera Detected" frame
         self.no_camera_frame = np.zeros((480, 640, 3), dtype=np.uint8)
         font = cv2.FONT_HERSHEY_SIMPLEX
         text = "NO CAMERA DETECTED"
@@ -171,14 +194,15 @@ class FlowcheckGUI:
         self.drainer = Centering.AutoDrainer(self.camera)
         self.drain_watcher = Centering.DrainWatcher(self.camera)
 
-        # Link the separate workflow script
+        # Workflows
         self.strada_workflow = Default_Workflow.StradaWorkflow(self, self.leveller, self.drainer, self.drain_watcher)
+        self.shelf_workflow = Shelf_Workflow.ShelfWorkflow(self, self.leveller, self.drainer, self.drain_watcher)
 
         self.create_sku_menu()
         self.create_motor_menu()
 
         # Load default SKU & Layout
-        self.select_sku("Strada\n(Shower Base)")
+        self.select_sku("Strada 6030L\n(shower base)")
         self.root.update_idletasks()
 
         self.latest_frame = None
@@ -192,10 +216,9 @@ class FlowcheckGUI:
         while self.is_running:
             try:
                 frame = self.camera.get_frame()
-                self.latest_frame = frame  # Will safely become None if the camera disconnects
+                self.latest_frame = frame
 
                 if frame is not None:
-                    # Feed current image into both centering + watcher
                     self.drainer.raw_color = frame
                     self.drain_watcher.raw_color = frame
 
@@ -215,11 +238,11 @@ class FlowcheckGUI:
         if show:
             self.video_container.grid()
             self.button_frame.grid()
-            self.info_frame.grid()
+            self.right_col_frame.grid()
         else:
             self.video_container.grid_remove()
             self.button_frame.grid_remove()
-            self.info_frame.grid_remove()
+            self.right_col_frame.grid_remove()
 
     # ==========================================
     # SKU SUBMENU LOGIC
@@ -232,7 +255,7 @@ class FlowcheckGUI:
             self.sku_frame.rowconfigure(row, weight=1, uniform="sku_grid_rows")
 
         sku_btns = [
-            "Strada\n(Shower Base)", "(Skirted Tub)", "(Tub-Shower)",
+            "Strada 6030L\n(shower base)", "(Skirted Tub)", "(Tub-Shower)",
             "", "*Raw Scan*", "Back"
         ]
 
@@ -252,9 +275,8 @@ class FlowcheckGUI:
 
     def select_sku(self, sku_name):
         self.selected_sku = sku_name
-        self.tubs_scanned = 0  # <-- NEW: Reset count when SKU changes
+        self.tubs_scanned = 0
 
-        # Format the SKU name to be single line if it has newlines
         display_name = sku_name.replace('\n', ' ')
         self.lbl_sku.config(text=f"SKU: {display_name}")
         self.lbl_units_scanned.config(text=f"Units Scanned: {self.tubs_scanned}")
@@ -263,27 +285,27 @@ class FlowcheckGUI:
         self.close_sku_menu()
 
     def apply_sku_layout(self, sku_name):
-        if sku_name in ["Strada\n(Shower Base)", "(Skirted Tub)"]:
-            self.root.columnconfigure(0, weight=3, uniform="expanded_cols")
-            self.root.columnconfigure(1, weight=2, uniform="expanded_cols")
-            self.video_container.grid(row=1, column=0, sticky="nsew", padx=(10, 10), pady=10)
-            self.info_frame.grid_configure(row=1, column=1, rowspan=1, sticky="w", padx=(10, 20), pady=0)
+        # Enforce exactly the same column space for the main window universally
+        self.root.columnconfigure(0, weight=3, uniform="expanded_cols")
+        self.root.columnconfigure(1, weight=2, uniform="expanded_cols")
+        self.video_container.grid(row=1, column=0, sticky="nsew", padx=(10, 10), pady=10)
+
+        if sku_name in ["Strada 6030L\n(shower base)", "(Skirted Tub)"]:
+            # Standard padding for main menus
+            self.right_col_frame.grid_configure(padx=(10, 40))
+            self.right_cam_container.pack_forget()
 
             for lbl in self.info_labels:
                 lbl.config(font=("Arial", 28, "bold"))
-
-            self.lbl_sku.config(font=("Arial", 20, "bold"), fg="#0044cc")  # Make it fit perfectly on one line
+            self.lbl_sku.config(font=("Arial", 20, "bold"), fg="#0044cc")
 
         elif sku_name == "(Tub-Shower)":
-            self.root.columnconfigure(0, weight=1, uniform="main_cols")
-            self.root.columnconfigure(1, weight=1, uniform="main_cols")
-            self.video_container.grid(row=1, column=0, sticky="nsew", padx=(40, 20), pady=10)
-            self.info_frame.grid_configure(row=0, column=1, rowspan=2, sticky="nw", padx=(20, 40), pady=(30, 10))
+            self.right_col_frame.grid_configure(padx=(10, 10))
+            self.right_cam_container.pack(side="top", expand=True, fill="both", pady=(5, 0))
 
             for lbl in self.info_labels:
                 lbl.config(font=("Arial", 24, "bold"))
-
-            self.lbl_sku.config(font=("Arial", 18, "bold"), fg="#0044cc")  # Make it fit perfectly on one line
+            self.lbl_sku.config(font=("Arial", 18, "bold"), fg="#0044cc")
 
     def open_sku_menu(self):
         self.toggle_main_view(False)
@@ -376,14 +398,21 @@ class FlowcheckGUI:
             self.stop_all_workflows()
             print("Scan Stopped.")
         else:
-            if self.selected_sku != "Strada\n(Shower Base)":
+            if self.selected_sku in ["Strada 6030L\n(shower base)", "(Skirted Tub)"]:
+                self.scan_active = True
+                self.main_buttons[0].config(text="STOP", bg="red")
+                print("Scan Started (Base Workflow).")
+                self.strada_workflow.start_workflow()
+
+            elif self.selected_sku == "(Tub-Shower)":
+                self.scan_active = True
+                self.main_buttons[0].config(text="STOP", bg="red")
+                print("Scan Started (Shelf Workflow).")
+                self.shelf_workflow.start_workflow()
+
+            else:
                 print(f"No workflow assigned for SKU: {self.selected_sku}")
                 return
-
-            self.scan_active = True
-            self.main_buttons[0].config(text="STOP", bg="red")
-            print("Scan Started.")
-            self.strada_workflow.start_workflow()
 
     def toggle_debug(self):
         self.debug_mode = not self.debug_mode
@@ -400,6 +429,7 @@ class FlowcheckGUI:
         self.main_buttons[0].config(text="START", bg="green")
 
         self.strada_workflow.stop_workflow()
+        self.shelf_workflow.stop_workflow()
 
         self.btn_auto.config(bg="#A9A9A9")
         self.btn_drain.config(bg="#A9A9A9")
@@ -407,12 +437,39 @@ class FlowcheckGUI:
         self.reset_drain_status()
 
     def increment_tub_count(self):
-        # <-- NEW: Updates the UI safely from the main thread
         def _update():
             self.tubs_scanned += 1
             self.lbl_units_scanned.config(text=f"Units Scanned: {self.tubs_scanned}")
 
         self.root.after(0, _update)
+
+    # --- IMAGE FREEZING & BOX POPULATION ---
+    def set_frozen_main_image(self, img):
+        self.frozen_main_img = img
+
+    def clear_frozen_main_image(self):
+        self.frozen_main_img = None
+
+    def set_left_box_image(self, img):
+        self._set_box_image(self.lbl_box_1, self.black_box_1, img)
+
+    def set_right_box_image(self, img):
+        self._set_box_image(self.lbl_box_2, self.black_box_2, img)
+
+    def _set_box_image(self, label, container, img):
+        cw = container.winfo_width()
+        ch = container.winfo_height()
+        if cw > 10 and ch > 10 and img is not None:
+            img_resized = cv2.resize(img, (cw, ch), interpolation=cv2.INTER_LINEAR)
+            imgtk = ImageTk.PhotoImage(image=Image.fromarray(cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)))
+            label.imgtk = imgtk
+            label.configure(image=imgtk)
+
+    def clear_box_images(self):
+        self.lbl_box_1.configure(image='')
+        self.lbl_box_1.imgtk = None
+        self.lbl_box_2.configure(image='')
+        self.lbl_box_2.imgtk = None
 
     # --- AUTO LEVEL ---
     def start_auto_level(self):
@@ -466,11 +523,18 @@ class FlowcheckGUI:
         self.drain_label = None
 
     def update_drain_window(self):
-        if not self.drainer.is_running:
+        # Allow workflow to keep window open via force flag
+        force_open = getattr(self, "force_drain_window", False)
+
+        if not self.drainer.is_running and not force_open:
             self.close_drain_window()
             return
 
-        frame = getattr(self.drainer, "display_frame", None)
+        # Prioritize the drainer's frame if it's running, otherwise use custom workflow frame
+        if self.drainer.is_running:
+            frame = getattr(self.drainer, "display_frame", None)
+        else:
+            frame = getattr(self, "custom_debug_frame", None)
 
         if frame is not None and self.drain_label is not None:
             try:
@@ -534,13 +598,21 @@ class FlowcheckGUI:
         self.camera.reset_depth()
 
     def update_video(self):
-        if hasattr(self.camera, "ref_depth") and self.camera.ref_depth is not None:
-            self.lbl_cam_height.config(text=f"Camera Height: {self.camera.ref_depth:.3f} m")
+        # 1. LIVE HEIGHT UPDATE
+        if hasattr(self.camera, "depth_stack") and len(self.camera.depth_stack) > 0:
+            depth_img = self.camera.depth_stack[0]
+            dist, _ = Centering.get_basin_distance(depth_img)
+            if dist is not None:
+                self.lbl_cam_height.config(text=f"Camera Height: {dist:.3f} m")
+            else:
+                self.lbl_cam_height.config(text="Camera Height: --")
         else:
             self.lbl_cam_height.config(text="Camera Height: --")
 
-        # Inject the fallback frame if the camera is missing
-        frame = self.latest_frame if self.latest_frame is not None else self.no_camera_frame
+        # 2. IMAGE DRAWING & FREEZE LOGIC
+        # Show the frozen image if one exists, otherwise stream live video
+        frame = self.frozen_main_img if self.frozen_main_img is not None else (
+            self.latest_frame if self.latest_frame is not None else self.no_camera_frame)
 
         if frame is not self.last_drawn_frame:
             self.last_drawn_frame = frame
@@ -559,6 +631,25 @@ class FlowcheckGUI:
                         self.current_w, self.current_h = cw, int(cw / aspect)
 
                     self.last_cw, self.last_ch = cw, ch
+
+                if self.selected_sku == "(Tub-Shower)":
+                    rc_w = self.right_cam_container.winfo_width()
+                    rc_h = self.right_cam_container.winfo_height()
+
+                    if rc_w > 10 and rc_h > 10:
+                        gap = 10
+                        box_h = rc_h
+                        box_w = int(box_h * (640 / 480))
+
+                        if (2 * box_w + gap) > rc_w:
+                            box_w = (rc_w - gap) // 2
+                            box_h = int(box_w * (480 / 640))
+
+                        x_offset = (rc_w - (2 * box_w + gap)) // 2
+                        y_offset = (rc_h - box_h) // 2
+
+                        self.black_box_1.place(x=x_offset, y=y_offset, width=box_w, height=box_h)
+                        self.black_box_2.place(x=x_offset + box_w + gap, y=y_offset, width=box_w, height=box_h)
 
                 frame_resized = cv2.resize(frame, (self.current_w, self.current_h), interpolation=cv2.INTER_LINEAR)
                 imgtk = ImageTk.PhotoImage(image=Image.fromarray(cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)))
