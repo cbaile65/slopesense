@@ -44,7 +44,7 @@ def largest_component(mask_u8, min_area=500):
 
     out = np.zeros_like(mask_u8)
     x, y, w, h = stats[best_i, cv2.CC_STAT_LEFT], stats[best_i, cv2.CC_STAT_TOP], stats[best_i, cv2.CC_STAT_WIDTH], \
-    stats[best_i, cv2.CC_STAT_HEIGHT]
+        stats[best_i, cv2.CC_STAT_HEIGHT]
     out[y:y + h, x:x + w][labels[y:y + h, x:x + w] == best_i] = 255
     return out
 
@@ -154,13 +154,7 @@ class DefectDetector:
             self.pipeline.wait_for_frames(TIMEOUT_MS)
         print("Warmup complete.")
 
-        self.click = {"x": W // 2, "y": H // 2}
         self.ref_depth = None
-
-    def register_click(self, x, y):
-        self.click["x"] = int(np.clip(x, 0, W - 1))
-        self.click["y"] = int(np.clip(y, 0, H - 1))
-        self.reset_depth()
 
     def reset_depth(self):
         self.ref_depth = None
@@ -189,11 +183,16 @@ class DefectDetector:
         depth_med = np.median(self.depth_stack, axis=0).astype(np.float32)
         depth_s = cv2.GaussianBlur(depth_med, (SMOOTH_K, SMOOTH_K), 0) if SMOOTH_K >= 3 else depth_med
 
-        x, y = self.click["x"], self.click["y"]
-        click_depth = float(depth_med[y, x])
+        # --- Automatic Center Sampling for Reference Depth ---
+        if self.ref_depth is None:
+            cy, cx = H // 2, W // 2
+            half_box = 20  # Grabs a 40x40 pixel square right in the middle
 
-        if self.ref_depth is None and Z_MIN_M < click_depth < Z_MAX_M:
-            self.ref_depth = click_depth
+            center_depths = depth_med[cy - half_box: cy + half_box, cx - half_box: cx + half_box]
+            valid_depths = center_depths[(center_depths > Z_MIN_M) & (center_depths < Z_MAX_M)]
+
+            if valid_depths.size > 0:
+                self.ref_depth = float(np.median(valid_depths))
 
         fg_u8 = np.zeros((H, W), dtype=np.uint8)
         if self.ref_depth is not None:
@@ -206,8 +205,8 @@ class DefectDetector:
         fg_mask = fg_u8 > 0
         highlight = color.copy()
 
+        # If it can't find the foreground mask, just return the raw image
         if not np.any(fg_mask):
-            cv2.circle(highlight, (x, y), 7, (0, 255, 255), -1)
             return highlight
 
         interior_u8 = make_interior_mask(fg_u8, INTERIOR_ERODE_PX)
@@ -223,8 +222,8 @@ class DefectDetector:
 
         sigma = robust_sigma(resid_local_s[interior_mask])
         div_u8 = filter_components(cv2.morphologyEx(cv2.morphologyEx(((interior_mask & (
-                    resid_local_s >= np.clip(AUTO_SIGMA_MULT * sigma, MIN_DEFECT_MM / 1000.0,
-                                             MAX_DEFECT_MM / 1000.0))).astype(np.uint8) * 255), cv2.MORPH_OPEN, self.k3,
+                resid_local_s >= np.clip(AUTO_SIGMA_MULT * sigma, MIN_DEFECT_MM / 1000.0,
+                                         MAX_DEFECT_MM / 1000.0))).astype(np.uint8) * 255), cv2.MORPH_OPEN, self.k3,
                                                                      iterations=1), cv2.MORPH_CLOSE, self.kclose,
                                                     iterations=1), MIN_DEFECT_AREA_PX)
 
@@ -242,9 +241,9 @@ class DefectDetector:
         if SHOW_DIVOTS: overlay[div_final_u8 > 0] = (0, 0, 255)
         highlight = cv2.addWeighted(overlay, 0.45, highlight, 0.55, 0)
 
+        # Draw only the edge outlines
         draw_mask_outline(highlight, fg_u8, (0, 255, 255), 1)
         draw_mask_outline(highlight, interior_u8, (0, 255, 0), 2)
-        cv2.circle(highlight, (x, y), 6, (0, 255, 255), -1)
 
         return highlight
 
