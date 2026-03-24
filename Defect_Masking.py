@@ -123,15 +123,12 @@ def filter_components_physical(mask_u8, depth_s, fx, fy, min_w_in, min_h_in):
 # ----------------- Main Class -----------------
 class DefectDetector:
     def __init__(self):
-        # Start only RGB and Depth on the primary pipeline
         self.pipeline = rs.pipeline()
         config = rs.config()
         config.enable_stream(rs.stream.color, W, H, rs.format.bgr8, FPS)
         config.enable_stream(rs.stream.depth, W, H, rs.format.z16, FPS)
 
         self.profile = self.pipeline.start(config)
-
-        # Expose the raw device so AutoLeveler can grab the IMU sensor separately!
         self.device = self.profile.get_device()
         self.depth_scale = self.device.first_depth_sensor().get_depth_scale()
 
@@ -139,6 +136,9 @@ class DefectDetector:
         self.fx, self.fy = float(intr.fx), float(intr.fy)
 
         self.align = rs.align(rs.stream.color)
+
+        # Enhanced structural kernels
+        self.k_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
         self.k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         self.k3 = np.ones((3, 3), np.uint8)
         self.kclose = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (POST_CLOSE_K, POST_CLOSE_K))
@@ -181,39 +181,71 @@ class DefectDetector:
         if self.depth_count < DEPTH_STACK_N: return color.copy()
 
         depth_med = np.median(self.depth_stack, axis=0).astype(np.float32)
-        depth_s = cv2.GaussianBlur(depth_med, (SMOOTH_K, SMOOTH_K), 0) if SMOOTH_K >= 3 else depth_med
 
-        # --- Automatic Center Sampling for Reference Depth ---
+        # 1. Bilateral Filter to smooth flat depth regions but preserve edges
+        depth_s = cv2.bilateralFilter(depth_med, d=9, sigmaColor=0.05, sigmaSpace=15)
+
         if self.ref_depth is None:
             cy, cx = H // 2, W // 2
-            half_box = 20  # Grabs a 40x40 pixel square right in the middle
-
+            half_box = 20
             center_depths = depth_med[cy - half_box: cy + half_box, cx - half_box: cx + half_box]
             valid_depths = center_depths[(center_depths > Z_MIN_M) & (center_depths < Z_MAX_M)]
-
             if valid_depths.size > 0:
                 self.ref_depth = float(np.median(valid_depths))
 
         fg_u8 = np.zeros((H, W), dtype=np.uint8)
+
         if self.ref_depth is not None:
+            # 2. Grab initial rough depth blob
             band = (depth_s > Z_MIN_M) & (depth_s < Z_MAX_M) & (np.abs(depth_s - self.ref_depth) <= BAND_HALF_M)
-            fg_u8[band] = 255
-            fg_u8 = largest_component(
-                cv2.morphologyEx(cv2.morphologyEx(fg_u8, cv2.MORPH_OPEN, self.k5, iterations=1), cv2.MORPH_CLOSE,
-                                 self.k5, iterations=2), FG_MIN_AREA)
+            raw_depth_mask = np.zeros((H, W), dtype=np.uint8)
+            raw_depth_mask[band] = 255
+
+            # Clean up the rough depth blob
+            raw_depth_mask = cv2.morphologyEx(
+                cv2.morphologyEx(raw_depth_mask, cv2.MORPH_OPEN, self.k_large, iterations=1), cv2.MORPH_CLOSE,
+                self.k_large, iterations=2)
+            raw_depth_mask = largest_component(raw_depth_mask, FG_MIN_AREA)
+
+            # 3. Dilate it slightly to create a "search area" for the RGB edges
+            search_area = cv2.dilate(raw_depth_mask, self.k_large, iterations=2)
+
+            # 4. Extract crisp edges from the high-contrast RGB image
+            gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
+            # Otsu automatically finds the optimal threshold separating the bright white pan from the dark floor
+            _, rgb_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+
+            # 5. Hybrid merge: We only want bright RGB pixels that are ALSO inside our depth search area.
+            # This prevents us from outlining the white socks on the floor.
+            fg_u8 = cv2.bitwise_and(rgb_mask, search_area)
+
+            # Clean up the combined mask
+            fg_u8 = cv2.morphologyEx(fg_u8, cv2.MORPH_CLOSE, self.k_large, iterations=1)
+            fg_u8 = largest_component(fg_u8, FG_MIN_AREA)
+
+            # 6. Final programmatic smoothing (approximating the polygon)
+            contours, _ = cv2.findContours(fg_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                c = max(contours, key=cv2.contourArea)
+                epsilon = 0.005 * cv2.arcLength(c, True)
+                approx_contour = cv2.approxPolyDP(c, epsilon, True)
+
+                fg_u8 = np.zeros_like(fg_u8)
+                cv2.drawContours(fg_u8, [approx_contour], -1, 255, thickness=cv2.FILLED)
 
         fg_mask = fg_u8 > 0
         highlight = color.copy()
 
-        # If it can't find the foreground mask, just return the raw image
         if not np.any(fg_mask):
             return highlight
 
+        # Generating the interior green line
         interior_u8 = make_interior_mask(fg_u8, INTERIOR_ERODE_PX)
         interior_mask = interior_u8 > 0
         if np.count_nonzero(interior_mask) < 1500:
             interior_u8, interior_mask = fg_u8.copy(), fg_mask
 
+        # Surface defect detection (unchanged)
         coeffs = fit_quadratic_surface(depth_s, interior_mask)
         resid_local_s = cv2.GaussianBlur(
             (depth_s - quadratic_surface_img(coeffs, H, W)) - masked_local_trend(
@@ -241,7 +273,7 @@ class DefectDetector:
         if SHOW_DIVOTS: overlay[div_final_u8 > 0] = (0, 0, 255)
         highlight = cv2.addWeighted(overlay, 0.45, highlight, 0.55, 0)
 
-        # Draw only the edge outlines
+        # Draw the new smoothed lines
         draw_mask_outline(highlight, fg_u8, (0, 255, 255), 1)
         draw_mask_outline(highlight, interior_u8, (0, 255, 0), 2)
 
