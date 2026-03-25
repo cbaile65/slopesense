@@ -34,8 +34,9 @@ class StradaWorkflow:
         self.autolevel_done_for_current_tub = False
 
         self.gui.on_drain_status_changed(False)
+        if hasattr(self.gui.camera, "disable_defect_search"):
+            self.gui.camera.disable_defect_search(clear_box=True)
 
-        # Always run passive drain watcher while START is active
         self.drain_watcher.start(status_callback=self.gui.on_drain_status_changed)
 
         def _workflow_manager():
@@ -45,11 +46,9 @@ class StradaWorkflow:
                     drain_seen = bool(self.drain_watcher.drain_present)
                     drain_locked = bool(self.drain_watcher.locked_drain_ready)
 
-                    # Drain lost -> tub is gone -> re-arm full cycle
                     if not drain_seen and self.last_drain_seen_state:
                         print("[Strada Workflow] Drain disappeared. Re-arming next cycle.")
 
-                        # <-- UPDATED: Increment count if the tub was fully processed before it left
                         if self.current_tub_processed:
                             print("[Strada Workflow] Tub successfully processed and removed. Incrementing count.")
                             self.gui.increment_tub_count()
@@ -58,18 +57,21 @@ class StradaWorkflow:
                         self.current_tub_processed = False
                         self.autolevel_done_for_current_tub = False
 
+                        if hasattr(self.gui.camera, "disable_defect_search"):
+                            self.gui.camera.disable_defect_search(clear_box=True)
+
                         if self.strada_cycle_running and self.drainer.is_running:
                             print("[Strada Workflow] Drain lost during centering. Aborting cycle.")
                             self.center_abort_requested = True
                             self.drainer.stop()
                             self.gui.root.after(0, self.gui.close_drain_window)
 
-                    # Run autolevel first for each new tub before drain search matters
                     if not self.autolevel_done_for_current_tub and not self.strada_cycle_running:
+                        if hasattr(self.gui.camera, "disable_defect_search"):
+                            self.gui.camera.disable_defect_search(clear_box=True)
                         print("[Strada Workflow] Starting autolevel for next tub.")
                         self.start_strada_cycle(current_workflow_id, mode="autolevel_then_wait_for_drain")
 
-                    # After autolevel, allow either a fresh new lock event OR an already-held locked drain
                     elif self.autolevel_done_for_current_tub and not self.current_tub_processed and not self.strada_cycle_running:
                         fresh_lock = self.drain_watcher.consume_new_lock_event()
 
@@ -100,9 +102,6 @@ class StradaWorkflow:
                 if not self.scan_active or self.workflow_id != workflow_id_at_start:
                     return
 
-                # ------------------------------------------
-                # MODE 1: autolevel first, then return to watcher
-                # ------------------------------------------
                 if mode == "autolevel_then_wait_for_drain":
                     print("[Strada Cycle] Starting autolevel.")
                     self.gui.root.after(0, lambda: self.gui.btn_auto.config(bg="green"))
@@ -119,9 +118,6 @@ class StradaWorkflow:
                     self.autolevel_done_for_current_tub = True
                     print("[Strada Cycle] Autolevel complete. Waiting for drain.")
 
-                # ------------------------------------------
-                # MODE 2: drain already found, do center only
-                # ------------------------------------------
                 elif mode == "center_only":
                     if not self.drain_watcher.drain_present:
                         print("[Strada Cycle] Drain not present anymore. Canceling centering.")
@@ -136,12 +132,16 @@ class StradaWorkflow:
                         stop_on_first_drain=False,
                     )
 
-                    while self.scan_active and self.workflow_id == workflow_id_at_start and self.drainer.is_running:
+                    while self.scan_active and self.workflow_id == workflow_id_at_start:
                         if not self.drain_watcher.drain_present:
                             print("[Strada Cycle] Drain lost during autocenter. Stopping centering.")
                             self.center_abort_requested = True
                             self.drainer.stop()
                             self.gui.root.after(0, self.gui.close_drain_window)
+                            break
+
+                        if not self.drainer.is_running:
+                            print("[Strada Cycle] Drainer reported complete.")
                             break
 
                         time.sleep(0.05)
@@ -153,7 +153,25 @@ class StradaWorkflow:
                         print("[Strada Cycle] Cycle aborted. Waiting for drain loss / next tub.")
                         return
 
-                    print("[Strada Cycle] Autocenter complete. Tub marked processed.")
+                    print("[Strada Cycle] Autocenter complete. Stopping drainer before delay.")
+                    self.drainer.stop()
+                    time.sleep(0.1)
+
+                    print("[Strada Cycle] Waiting 2 seconds before starting defect/edge detection.")
+                    delay_start = time.time()
+                    while self.scan_active and self.workflow_id == workflow_id_at_start and (time.time() - delay_start) < 2.0:
+                        if not self.drain_watcher.drain_present:
+                            print("[Strada Cycle] Drain lost during post-center delay. Canceling defect search.")
+                            return
+                        time.sleep(0.05)
+
+                    if not self.scan_active or self.workflow_id != workflow_id_at_start:
+                        return
+
+                    print("[Strada Cycle] Delay complete. Starting defect/edge detection.")
+                    if hasattr(self.gui.camera, "enable_defect_search"):
+                        self.gui.camera.enable_defect_search(reset_timer=True)
+
                     self.current_tub_processed = True
 
             except Exception as e:
@@ -179,6 +197,9 @@ class StradaWorkflow:
         self.center_abort_requested = False
         self.last_drain_seen_state = False
         self.autolevel_done_for_current_tub = False
+
+        if hasattr(self.gui.camera, "disable_defect_search"):
+            self.gui.camera.disable_defect_search(clear_box=True)
 
         self.leveller.stop()
         self.drainer.stop()

@@ -97,13 +97,14 @@ class FlowcheckGUI:
             tk.Label(self.info_frame, text="SKU: None", bg="white", fg="#0044cc"),
             tk.Label(self.info_frame, text="Camera Height: --", bg="white", fg="black"),
             tk.Label(self.info_frame, text="Drain Detected: --", bg="white", fg="black"),
-            tk.Label(self.info_frame, text="Defects Detected: --", bg="white", fg="black"),
+            tk.Label(self.info_frame, text="Defects Detected: No", bg="white", fg="black"),
             tk.Label(self.info_frame, text="Units Scanned: 0", bg="white", fg="black")
         ]
 
         self.lbl_sku = self.info_labels[0]
         self.lbl_cam_height = self.info_labels[1]
         self.lbl_drain_detected = self.info_labels[2]
+        self.lbl_defects_detected = self.info_labels[3]
         self.lbl_units_scanned = self.info_labels[4]
 
         for lbl in self.info_labels:
@@ -171,14 +172,25 @@ class FlowcheckGUI:
                 def __init__(self):
                     self.device = None
                     self.ref_depth = None
+                    self.locked_relative_box = None
 
-                def get_frame(self): return None
+                def get_frame(self):
+                    return None
 
-                def stop(self): pass
+                def stop(self):
+                    pass
 
-                def register_click(self, x, y): pass
+                def register_click(self, x, y):
+                    pass
 
-                def reset_depth(self): pass
+                def reset_depth(self):
+                    pass
+
+                def enable_defect_search(self, reset_timer=True):
+                    pass
+
+                def disable_defect_search(self, clear_box=True):
+                    self.locked_relative_box = None
 
             self.camera = DummyCamera()
 
@@ -597,7 +609,7 @@ class FlowcheckGUI:
     def on_r_keypress(self, event):
         self.camera.reset_depth()
 
-    def update_video(self):
+    def  update_video(self):
         # 1. LIVE HEIGHT UPDATE
         if hasattr(self.camera, "depth_stack") and len(self.camera.depth_stack) > 0:
             depth_img = self.camera.depth_stack[0]
@@ -609,10 +621,17 @@ class FlowcheckGUI:
         else:
             self.lbl_cam_height.config(text="Camera Height: --")
 
-        # 2. IMAGE DRAWING & FREEZE LOGIC
-        # Show the frozen image if one exists, otherwise stream live video
+        # 2. DEFECT STATUS UPDATE
+        defect_active = bool(getattr(self.camera, "locked_relative_box", None) is not None)
+        if defect_active:
+            self.lbl_defects_detected.config(text="Defects Detected: Yes", fg="red")
+        else:
+            self.lbl_defects_detected.config(text="Defects Detected: No", fg="black")
+
+        # 3. IMAGE DRAWING & FREEZE LOGIC
         frame = self.frozen_main_img if self.frozen_main_img is not None else (
-            self.latest_frame if self.latest_frame is not None else self.no_camera_frame)
+            self.latest_frame if self.latest_frame is not None else self.no_camera_frame
+        )
 
         if frame is not self.last_drawn_frame:
             self.last_drawn_frame = frame
