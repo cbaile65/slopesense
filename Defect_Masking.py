@@ -216,6 +216,14 @@ class DefectDetector:
         self.div_count = 0
         self.div_history[:] = 0
         self.defect_first_seen_time = None
+
+        # --- CRITICAL FIX ---
+        # Flush the old reference depth and old stack frames
+        # so it learns the new tub height immediately after centering.
+        self.ref_depth = None
+        self.depth_count = 0
+        # --------------------
+
         if reset_timer:
             self.scan_start_time = time.time()
             self.locked_relative_box = None
@@ -257,6 +265,8 @@ class DefectDetector:
 
         self.depth_stack[self.depth_count % DEPTH_STACK_N] = depth_m
         self.depth_count += 1
+
+        # If we just reset the stack, return clean color until we have a stable median
         if self.depth_count < DEPTH_STACK_N:
             return color.copy()
 

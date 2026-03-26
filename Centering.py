@@ -18,8 +18,8 @@ MOTOR_B_BACKWARD_PIN = 27
 # ===================================================
 # # SETTINGS
 # # ===============================================================
-TARGET_DISTANCE_M = 1.05
-DISTANCE_TOL_M = 0.10
+TARGET_DISTANCE_M = 0.98
+DISTANCE_TOL_M = 0.05
 
 TARGET_Y_FRAC = 0.50
 Y_TOL_PX = 15
